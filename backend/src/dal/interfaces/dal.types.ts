@@ -1,4 +1,9 @@
 import type { FilterQuery, Types, UpdateQuery } from 'mongoose';
+import type {
+  AppErrorCode,
+  AppErrorDetails,
+  AppErrorStage,
+} from '../../common/errors/app-error';
 
 import type { Conversation } from '../schemas/conversation.schema';
 import type { Event } from '../schemas/event.schema';
@@ -25,6 +30,7 @@ export type EventType =
   | 'tool_called'
   | 'tool_result'
   | 'message_created'
+  | 'usage_final'
   | 'run_completed'
   | 'run_failed';
 
@@ -34,6 +40,12 @@ export interface EventPayload {
   toolName?: string;
   toolData?: Record<string, unknown>;
   error?: string;
+  errorCode?: AppErrorCode;
+  errorStage?: AppErrorStage;
+  errorRetryable?: boolean;
+  errorStatusCode?: number;
+  errorDetails?: AppErrorDetails;
+  totalTokens?: number;
 }
 
 export type UserFilter = FilterQuery<User>;

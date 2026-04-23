@@ -1,3 +1,5 @@
+import type { AppError } from '../common/errors/app-error';
+
 export interface ChatRequest {
   userId: string;
   message: string;
@@ -33,6 +35,7 @@ export interface ChatResponse {
     text: string;
     createdAt: string | null;
   };
+  warnings: AppError[];
   usage: {
     totalTokens: number;
   } | null;

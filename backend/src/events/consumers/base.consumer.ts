@@ -1,3 +1,3 @@
 export abstract class BaseConsumer {
-  abstract consume(eventName: string, payload: unknown): void;
+  abstract consume(eventName: string, payload: unknown): Promise<void> | void;
 }

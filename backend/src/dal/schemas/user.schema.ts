@@ -15,6 +15,15 @@ export class User {
   @Prop({ required: true, trim: true, lowercase: true })
   email!: string;
 
+  @Prop({ type: [String], default: [] })
+  allergies!: string[];
+
+  @Prop({ type: [String], default: [] })
+  medicalConditions!: string[];
+
+  @Prop({ type: [String], default: [] })
+  medicalHistory!: string[];
+
   @Prop(cudFoilProp)
   cudFoil!: CudFoil;
 }
@@ -22,4 +31,3 @@ export class User {
 export type UserDocument = HydratedDocument<User>;
 
 export const UserSchema = SchemaFactory.createForClass(User);
-

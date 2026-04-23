@@ -48,4 +48,39 @@ export class UsagesRepository extends BaseRepository<Usage> {
       .sort({ 'cudFoil.createdAt': -1, _id: -1 })
       .exec();
   }
+
+  async upsertByRunId(input: {
+    userId: string;
+    conversationId: string;
+    runId: string;
+    totalTokens: number;
+  }): Promise<HydratedDocument<Usage>> {
+    return this.model
+      .findOneAndUpdate(
+        {
+          runId: input.runId,
+          'cudFoil.deleted': false,
+        },
+        {
+          $set: {
+            userId: input.userId,
+            conversationId: input.conversationId,
+            totalTokens: input.totalTokens,
+          },
+          $setOnInsert: {
+            runId: input.runId,
+            cudFoil: {
+              deleted: false,
+              deletedAt: null,
+            },
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+        },
+      )
+      .exec() as Promise<HydratedDocument<Usage>>;
+  }
 }

@@ -16,6 +16,16 @@ export class MessagesRepository extends BaseRepository<Message> {
     super(messageModel);
   }
 
+  async findByConversationId(conversationId: string): Promise<Array<HydratedDocument<Message>>> {
+    return this.model
+      .find({
+        conversationId,
+        'cudFoil.deleted': false,
+      })
+      .sort({ 'cudFoil.createdAt': 1, _id: 1 })
+      .exec();
+  }
+
   async findPageByConversationId(params: {
     conversationId: string;
     limit: number;

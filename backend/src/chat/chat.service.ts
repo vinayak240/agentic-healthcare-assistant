@@ -1,21 +1,28 @@
-import {
-  Injectable,
-  InternalServerErrorException,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import type { HydratedDocument, Types } from 'mongoose';
 import { AgentService } from '../agent/agent.service';
 import type { AgentEvent } from '../agent/agent.types';
+import {
+  AppError,
+  AppException,
+  createAppException,
+  normalizeError,
+  toEventErrorPayload,
+} from '../common/errors/app-error';
 import { ConversationsRepository } from '../dal/repositories/conversations.repository';
 import { MessagesRepository } from '../dal/repositories/messages.repository';
 import { RunsRepository } from '../dal/repositories/runs.repository';
-import { UsagesRepository } from '../dal/repositories/usages.repository';
 import { UsersRepository } from '../dal/repositories/users.repository';
 import type { Conversation } from '../dal/schemas/conversation.schema';
 import type { Message } from '../dal/schemas/message.schema';
 import type { Run } from '../dal/schemas/run.schema';
+import { AppEventEmitter } from '../events/emitter/event.emitter';
 import { createSseEvent } from './sse-event.helper';
 import type { ChatRequest, ChatResponse, StructuredSseEvent } from './chat.types';
+
+interface PreparedChatRequest {
+  conversation: HydratedDocument<Conversation> | null;
+}
 
 @Injectable()
 export class ChatService {
@@ -23,18 +30,31 @@ export class ChatService {
     private readonly conversationsRepository: ConversationsRepository,
     private readonly runsRepository: RunsRepository,
     private readonly messagesRepository: MessagesRepository,
-    private readonly usagesRepository: UsagesRepository,
     private readonly usersRepository: UsersRepository,
     private readonly agentService: AgentService,
+    private readonly appEventEmitter: AppEventEmitter,
   ) {}
+
+  async prepareChatRequest(request: ChatRequest): Promise<PreparedChatRequest> {
+    await this.ensureUserExists(request.userId);
+    this.agentService.assertReady();
+
+    return {
+      conversation: request.conversationId
+        ? await this.findConversationForUser(request.conversationId, request.userId)
+        : null,
+    };
+  }
 
   async createChat(
     request: ChatRequest,
     onEvent?: (event: StructuredSseEvent) => Promise<void> | void,
+    prepared?: PreparedChatRequest,
   ): Promise<ChatResponse> {
+    const preparedRequest = prepared ?? (await this.prepareChatRequest(request));
     const startedAt = new Date();
-    await this.ensureUserExists(request.userId);
-    const conversation = await this.resolveConversation(request, startedAt);
+    const conversation =
+      preparedRequest.conversation ?? (await this.createConversation(request, startedAt));
     const run = await this.runsRepository.create({
       userId: this.toObjectId(request.userId),
       conversationId: this.toObjectId(this.getDocumentId(conversation)),
@@ -59,6 +79,30 @@ export class ChatService {
       },
     });
 
+    void this.appEventEmitter.emitEvent({
+      userId: request.userId,
+      conversationId: this.getDocumentId(conversation),
+      runId: this.getDocumentId(run),
+      source: 'system',
+      type: 'run_started',
+      payload: {
+        input: request.message,
+      },
+    });
+    void this.appEventEmitter.emitEvent({
+      userId: request.userId,
+      conversationId: this.getDocumentId(conversation),
+      runId: this.getDocumentId(run),
+      source: 'user',
+      type: 'message_created',
+      payload: {
+        input: request.message,
+        toolData: {
+          role: 'user',
+        },
+      },
+    });
+
     await onEvent?.(
       createSseEvent(this.getDocumentId(run), 'run.started', {
         conversationId: this.getDocumentId(conversation),
@@ -69,6 +113,7 @@ export class ChatService {
     let assistantText = '';
     let completedMessage: string | null = null;
     let totalTokens: number | null = null;
+    const warnings: AppError[] = [];
 
     try {
       for await (const agentEvent of this.agentService.streamResponse({
@@ -89,6 +134,10 @@ export class ChatService {
           totalTokens = agentEvent.totalTokens;
         }
 
+        if (agentEvent.type === 'run.warning') {
+          warnings.push(agentEvent.error);
+        }
+
         await onEvent?.(this.mapAgentEventToSseEvent(this.getDocumentId(run), agentEvent));
       }
 
@@ -102,15 +151,6 @@ export class ChatService {
           text: finalAssistantText,
         },
       });
-
-      if (totalTokens !== null) {
-        await this.usagesRepository.create({
-          userId: this.toObjectId(request.userId),
-          conversationId: this.toObjectId(this.getDocumentId(conversation)),
-          runId: this.toObjectId(this.getDocumentId(run)),
-          totalTokens,
-        });
-      }
 
       const endedAt = new Date();
       const completedRun = await this.runsRepository.updateById(this.getDocumentId(run), {
@@ -126,11 +166,50 @@ export class ChatService {
         },
       });
 
+      void this.appEventEmitter.emitEvent({
+        userId: request.userId,
+        conversationId: this.getDocumentId(conversation),
+        runId: this.getDocumentId(run),
+        source: 'agent',
+        type: 'message_created',
+        payload: {
+          output: finalAssistantText,
+          toolData: {
+            role: 'assistant',
+          },
+        },
+      });
+
+      if (totalTokens !== null) {
+        void this.appEventEmitter.emitEvent({
+          userId: request.userId,
+          conversationId: this.getDocumentId(conversation),
+          runId: this.getDocumentId(run),
+          source: 'system',
+          type: 'usage_final',
+          payload: {
+            totalTokens,
+          },
+        });
+      }
+
+      void this.appEventEmitter.emitEvent({
+        userId: request.userId,
+        conversationId: this.getDocumentId(conversation),
+        runId: this.getDocumentId(run),
+        source: 'system',
+        type: 'run_completed',
+        payload: {
+          output: finalAssistantText,
+        },
+      });
+
       const response = {
         conversation: this.serializeConversation(conversation, endedAt),
         run: this.serializeCompletedRun(completedRun ?? run, endedAt),
         assistantMessage: this.serializeAssistantMessage(assistantMessage),
-        usage: totalTokens === null ? null : { totalTokens },
+        warnings,
+        usage: null,
       } satisfies ChatResponse;
 
       await onEvent?.(
@@ -142,7 +221,12 @@ export class ChatService {
 
       return response;
     } catch (error) {
+      const appError = normalizeError(error, {
+        stage: 'system',
+        fallbackCode: 'CHAT_INTERNAL_ERROR',
+      });
       const endedAt = new Date();
+
       await this.runsRepository.updateById(this.getDocumentId(run), {
         $set: {
           status: 'failed',
@@ -150,32 +234,50 @@ export class ChatService {
         },
       });
 
+      void this.appEventEmitter.emitEvent({
+        userId: request.userId,
+        conversationId: this.getDocumentId(conversation),
+        runId: this.getDocumentId(run),
+        source: 'system',
+        type: 'run_failed',
+        payload: toEventErrorPayload(appError),
+      });
+
+      await onEvent?.(
+        createSseEvent(this.getDocumentId(run), 'run.failed', {
+          error: appError,
+        }),
+      );
       await onEvent?.(
         createSseEvent(this.getDocumentId(run), 'error', {
-          message: error instanceof Error ? error.message : 'Unknown error',
+          error: appError,
+          message: appError.message,
         }),
       );
 
-      throw new InternalServerErrorException('Chat execution failed');
+      throw new AppException(appError);
     }
   }
 
-  private async resolveConversation(
+  private async createConversation(
     request: ChatRequest,
     timestamp: Date,
   ): Promise<HydratedDocument<Conversation>> {
-    if (!request.conversationId) {
-      return this.conversationsRepository.create({
-        userId: this.toObjectId(request.userId),
-        title: request.title?.trim() || this.deriveConversationTitle(request.message),
-        lastMessageAt: timestamp,
-      });
-    }
+    return this.conversationsRepository.create({
+      userId: this.toObjectId(request.userId),
+      title: request.title?.trim() || this.deriveConversationTitle(request.message),
+      lastMessageAt: timestamp,
+    });
+  }
 
-    const conversation = await this.conversationsRepository.findById(request.conversationId);
+  private async findConversationForUser(
+    conversationId: string,
+    userId: string,
+  ): Promise<HydratedDocument<Conversation>> {
+    const conversation = await this.conversationsRepository.findById(conversationId);
 
-    if (!conversation || String(conversation.userId) !== request.userId) {
-      throw new NotFoundException('Conversation not found');
+    if (!conversation || String(conversation.userId) !== userId) {
+      throw createAppException('CONVERSATION_NOT_FOUND');
     }
 
     return conversation;
@@ -217,6 +319,10 @@ export class ChatService {
       case 'usage.final':
         return createSseEvent(runId, event.type, {
           totalTokens: event.totalTokens,
+        });
+      case 'run.warning':
+        return createSseEvent(runId, event.type, {
+          error: event.error,
         });
     }
   }
@@ -270,7 +376,7 @@ export class ChatService {
     const user = await this.usersRepository.findById(userId);
 
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw createAppException('USER_NOT_FOUND');
     }
   }
 }

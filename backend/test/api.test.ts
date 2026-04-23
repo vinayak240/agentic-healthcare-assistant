@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { TestingModule } from '@nestjs/testing';
 import { ChatRequestDto } from '../src/api/dto/chat-request.dto';
@@ -45,8 +46,15 @@ describe('API layer', () => {
     expect(response.run.id).toBe(TEST_IDS.runId);
     expect(response.run.status).toBe('completed');
     expect(response.assistantMessage.text).toBe('Mock assistant reply');
-    expect(response.usage?.totalTokens).toBe(144);
+    expect(response.warnings).toEqual([]);
+    expect(response.usage).toBeNull();
     expect(ctx.mocks.messagesRepository.createCalls).toHaveLength(2);
+    expect(ctx.mocks.usagesRepository.createCalls).toHaveLength(0);
+    expect(
+      ctx.mocks.appEventEmitter.emitCalls.some(
+        (call) => call.type === 'usage_final' && call.payload?.totalTokens === 144,
+      ),
+    ).toBe(true);
     expect(ctx.mocks.runsRepository.updateCalls.some((call) => {
       const set = call.update.$set as { status?: string } | undefined;
       return set?.status === 'completed';
@@ -67,7 +75,12 @@ describe('API layer', () => {
       { type: 'body', metatype: ChatRequestDto, data: '' },
     );
 
-    await expect(ctx.controllers.chat.createChatMessage(body)).rejects.toThrow('User not found');
+    await expect(ctx.controllers.chat.createChatMessage(body)).rejects.toMatchObject({
+      appError: expect.objectContaining({
+        code: 'USER_NOT_FOUND',
+        statusCode: 404,
+      }),
+    });
     expect(ctx.mocks.agentService.calls).toHaveLength(0);
   });
 
@@ -105,6 +118,7 @@ describe('API layer', () => {
     const types = events.map((event) => event.type);
 
     expect(response.headers['Content-Type']).toBe('text/event-stream');
+    expect(response.flushHeadersCalled).toBe(true);
     expect(types[0]).toBe('run.started');
     expect(types).toContain('tool.call.started');
     expect(types).toContain('tool.call.completed');
@@ -113,6 +127,33 @@ describe('API layer', () => {
     expect(types).toContain('usage.final');
     expect(types.at(-1)).toBe('run.completed');
     expect(events.every((event) => event.runId === TEST_IDS.runId)).toBe(true);
+  });
+
+  it('POST /chat/stream fails before opening SSE when preflight fails', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const writes: string[] = [];
+    const response = createMockSseResponse(writes);
+    const body = await validateDto(
+      ctx.validationPipe,
+      {
+        userId: '507f1f77bcf86cd799439099',
+        message: 'This should fail before streaming',
+      },
+      { type: 'body', metatype: ChatRequestDto, data: '' },
+    );
+
+    await expect(ctx.controllers.chat.streamChatMessage(body, response as never)).rejects.toMatchObject(
+      {
+        appError: expect.objectContaining({
+          code: 'USER_NOT_FOUND',
+          statusCode: 404,
+        }),
+      },
+    );
+    expect(response.flushHeadersCalled).toBe(false);
+    expect(writes).toEqual([]);
   });
 
   it('POST /chat marks the run as failed when the agent stream errors', async () => {
@@ -132,13 +173,142 @@ describe('API layer', () => {
       { type: 'body', metatype: ChatRequestDto, data: '' },
     );
 
-    await expect(ctx.controllers.chat.createChatMessage(body)).rejects.toThrow(
-      'Chat execution failed',
-    );
+    await expect(ctx.controllers.chat.createChatMessage(body)).rejects.toMatchObject({
+      appError: expect.objectContaining({
+        code: 'CHAT_INTERNAL_ERROR',
+        statusCode: 500,
+      }),
+    });
     expect(ctx.mocks.runsRepository.updateCalls.some((call) => {
       const set = call.update.$set as { status?: string } | undefined;
       return set?.status === 'failed';
     })).toBe(true);
+    expect(
+      ctx.mocks.appEventEmitter.emitCalls.some(
+        (call) =>
+          call.type === 'run_failed' &&
+          call.payload?.errorCode === 'CHAT_INTERNAL_ERROR' &&
+          call.payload?.errorStatusCode === 500,
+      ),
+    ).toBe(true);
+  });
+
+  it('POST /chat returns warnings when the final answer is degraded but completed', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    ctx.mocks.agentService.streamResponse = async function* () {
+      yield {
+        type: 'run.warning' as const,
+        error: {
+          code: 'LLM_RENDERING_FAILED',
+          message: 'The answer was delivered with a fallback response.',
+          retryable: true,
+          stage: 'rendering' as const,
+          statusCode: 200,
+          details: {
+            causeCode: 'LLM_UNAVAILABLE',
+          },
+        },
+      };
+      yield {
+        type: 'message.delta' as const,
+        delta: 'Fallback answer',
+      };
+      yield {
+        type: 'message.completed' as const,
+        message: 'Fallback answer',
+      };
+      yield {
+        type: 'usage.final' as const,
+        totalTokens: 64,
+      };
+    };
+
+    const body = await validateDto(
+      ctx.validationPipe,
+      {
+        userId: TEST_IDS.userId,
+        message: 'Give me the answer',
+      },
+      { type: 'body', metatype: ChatRequestDto, data: '' },
+    );
+
+    const response = await ctx.controllers.chat.createChatMessage(body);
+
+    expect(response.run.status).toBe('completed');
+    expect(response.assistantMessage.text).toBe('Fallback answer');
+    expect(response.warnings).toEqual([
+      expect.objectContaining({
+        code: 'LLM_RENDERING_FAILED',
+        stage: 'rendering',
+      }),
+    ]);
+  });
+
+  it('POST /chat/stream emits run.warning and run.failed payloads for the UI', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const writes: string[] = [];
+    const response = createMockSseResponse(writes);
+    let callCount = 0;
+    ctx.mocks.agentService.streamResponse = async function* () {
+      callCount += 1;
+
+      if (callCount === 1) {
+        yield {
+          type: 'run.warning' as const,
+          error: {
+            code: 'LLM_RENDERING_FAILED',
+            message: 'The answer was delivered with a fallback response.',
+            retryable: true,
+            stage: 'rendering' as const,
+            statusCode: 200,
+          },
+        };
+        yield {
+          type: 'message.completed' as const,
+          message: 'Fallback answer',
+        };
+        yield {
+          type: 'usage.final' as const,
+          totalTokens: 32,
+        };
+        return;
+      }
+
+      throw new Error('unused');
+    };
+
+    const body = await validateDto(
+      ctx.validationPipe,
+      {
+        userId: TEST_IDS.userId,
+        message: 'Trigger a warning',
+      },
+      { type: 'body', metatype: ChatRequestDto, data: '' },
+    );
+
+    await ctx.controllers.chat.streamChatMessage(body, response as never);
+
+    const events = parseSseEvents(writes.join(''));
+
+    expect(events.some((event) => event.type === 'run.warning')).toBe(true);
+    expect(events.some((event) => event.type === 'run.completed')).toBe(true);
+
+    writes.length = 0;
+    const failedResponse = createMockSseResponse(writes);
+    ctx.mocks.agentService.streamResponse = async function* () {
+      throw new Error('boom');
+    };
+
+    await ctx.controllers.chat.streamChatMessage(body, failedResponse as never);
+
+    const failedEvents = parseSseEvents(writes.join(''));
+
+    expect(failedEvents.some((event) => event.type === 'run.failed')).toBe(true);
+    expect(failedEvents.some((event) => event.type === 'error')).toBe(true);
   });
 
   it('GET /conversations returns a paginated conversation list', async () => {
@@ -309,7 +479,7 @@ describe('API layer', () => {
     });
   });
 
-  it('POST /users creates a user with normalized email', async () => {
+  it('POST /users creates a user with normalized email and health profile arrays', async () => {
     const ctx = await createApiTestContext();
     moduleRef = ctx.moduleRef;
 
@@ -318,6 +488,9 @@ describe('API layer', () => {
       {
         name: '  Jane Doe  ',
         email: 'Jane.Doe@Example.com',
+        allergies: [' Penicillin ', ''],
+        medicalConditions: [' Asthma '],
+        medicalHistory: [' Seasonal allergies '],
       },
       { type: 'body', metatype: CreateUserDto, data: '' },
     );
@@ -326,9 +499,15 @@ describe('API layer', () => {
 
     expect(response.id).toBe(TEST_IDS.userId);
     expect(response.email).toBe('jane.doe@example.com');
+    expect(response.allergies).toEqual(['Penicillin']);
+    expect(response.medicalConditions).toEqual(['Asthma']);
+    expect(response.medicalHistory).toEqual(['Seasonal allergies']);
     expect(ctx.mocks.usersRepository.createCalls[0]).toEqual({
       name: 'Jane Doe',
       email: 'jane.doe@example.com',
+      allergies: ['Penicillin'],
+      medicalConditions: ['Asthma'],
+      medicalHistory: ['Seasonal allergies'],
     });
   });
 
@@ -419,11 +598,14 @@ describe('API layer', () => {
 function createMockSseResponse(writes: string[]) {
   return {
     headers: {} as Record<string, string>,
+    flushHeadersCalled: false,
     writableEnded: false,
     setHeader(name: string, value: string) {
       this.headers[name] = value;
     },
-    flushHeaders() {},
+    flushHeaders() {
+      this.flushHeadersCalled = true;
+    },
     write(chunk: string) {
       writes.push(chunk);
       return true;

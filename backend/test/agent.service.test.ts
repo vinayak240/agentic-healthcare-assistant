@@ -1,0 +1,487 @@
+import { describe, expect, it } from 'bun:test';
+import { AgentService } from '../src/agent/agent.service';
+
+describe('AgentService', () => {
+  it('streams tool events before final answer deltas', async () => {
+    process.env.AGENT_MAX_CAP = '5';
+    process.env.AGENT_HISTORY_CAP = '10';
+
+    const appEventEmitter = {
+      emitCalls: [] as Array<Record<string, unknown>>,
+      async emitEvent(input: Record<string, unknown>) {
+        this.emitCalls.push(input);
+      },
+    };
+
+    const service = new AgentService(
+      {
+        listTools() {
+          return [
+            {
+              name: 'lookup',
+              description: 'Lookup tool',
+              inputType: 'LookupInput',
+              outputType: 'LookupOutput',
+              inputSchema: { type: 'object' },
+            },
+          ];
+        },
+        async executeTool(name: string, input: Record<string, unknown>) {
+          return {
+            tool: name,
+            echoed: input.query,
+          };
+        },
+      } as never,
+      {
+        createCalls: 0,
+        async createJsonResponse() {
+          this.createCalls += 1;
+
+          return {
+            content:
+              this.createCalls === 1
+                ? JSON.stringify({
+                    thought: 'need tool',
+                    action: 'lookup',
+                    input: { query: 'cough' },
+                    answer: '',
+                  })
+                : JSON.stringify({
+                    thought: 'done',
+                    action: 'final_answer',
+                    input: {},
+                    answer: 'Give a short helpful answer',
+                  }),
+            totalTokens: 11,
+          };
+        },
+        async *streamTextResponse() {
+          yield 'Hello ';
+          yield 'there';
+
+          return {
+            content: 'Hello there',
+            totalTokens: 7,
+          };
+        },
+      } as never,
+      {
+        async findByConversationId() {
+          return [
+            {
+              runId: 'previous-run',
+              role: 'user',
+              content: { text: 'previous question' },
+            },
+            {
+              runId: '507f1f77bcf86cd799439013',
+              role: 'user',
+              content: { text: 'current question' },
+            },
+          ];
+        },
+      } as never,
+      appEventEmitter as never,
+    );
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+
+    for await (const event of service.streamResponse({
+      userId: '507f1f77bcf86cd799439011',
+      conversationId: '507f1f77bcf86cd799439012',
+      runId: '507f1f77bcf86cd799439013',
+      message: 'I have cough',
+    })) {
+      events.push(event);
+
+      if (event.type === 'message.completed') {
+        break;
+      }
+    }
+
+    expect(events.map((event) => event.type)).toEqual([
+      'tool.call.started',
+      'tool.call.completed',
+      'message.delta',
+      'message.delta',
+      'message.completed',
+    ]);
+    expect(events[0]).toEqual({
+      type: 'tool.call.started',
+      toolName: 'lookup',
+      input: { query: 'cough' },
+    });
+    expect(events[1]).toEqual({
+      type: 'tool.call.completed',
+      toolName: 'lookup',
+      output: {
+        tool: 'lookup',
+        echoed: 'cough',
+      },
+    });
+    expect(events[4]).toEqual({
+      type: 'message.completed',
+      message: 'Hello there',
+    });
+    expect(
+      appEventEmitter.emitCalls.filter((call) => call.type === 'llm_called'),
+    ).toHaveLength(3);
+    expect(
+      appEventEmitter.emitCalls.some(
+        (call) => call.type === 'tool_called' && call.payload?.toolName === 'lookup',
+      ),
+    ).toBe(true);
+    expect(
+      appEventEmitter.emitCalls.some(
+        (call) => call.type === 'tool_result' && call.payload?.toolName === 'lookup',
+      ),
+    ).toBe(true);
+  });
+
+  it('caps conversation history to the last configured messages', async () => {
+    process.env.AGENT_MAX_CAP = '5';
+    process.env.AGENT_HISTORY_CAP = '2';
+
+    let capturedPrompt = '';
+    const appEventEmitter = {
+      async emitEvent() {
+        return undefined;
+      },
+    };
+
+    const service = new AgentService(
+      {
+        listTools() {
+          return [];
+        },
+        async executeTool() {
+          return {};
+        },
+      } as never,
+      {
+        async createJsonResponse(prompt: string) {
+          if (!capturedPrompt) {
+            capturedPrompt = prompt;
+          }
+
+          return {
+            content: JSON.stringify({
+              thought: 'done',
+              action: 'final_answer',
+              input: {},
+              answer: 'Short answer',
+            }),
+            totalTokens: 5,
+          };
+        },
+        async *streamTextResponse() {
+          yield 'Done';
+
+          return {
+            content: 'Done',
+            totalTokens: 3,
+          };
+        },
+      } as never,
+      {
+        async findByConversationId() {
+          return [
+            { runId: 'r1', role: 'user', content: { text: 'm1' } },
+            { runId: 'r2', role: 'assistant', content: { text: 'm2' } },
+            { runId: 'r3', role: 'user', content: { text: 'm3' } },
+            { runId: 'r4', role: 'assistant', content: { text: 'm4' } },
+            { runId: '507f1f77bcf86cd799439013', role: 'user', content: { text: 'current' } },
+          ];
+        },
+      } as never,
+      appEventEmitter as never,
+    );
+
+    for await (const event of service.streamResponse({
+      userId: '507f1f77bcf86cd799439011',
+      conversationId: '507f1f77bcf86cd799439012',
+      runId: '507f1f77bcf86cd799439013',
+      message: 'latest question',
+    })) {
+      if (event.type === 'message.completed') {
+        break;
+      }
+    }
+
+    expect(capturedPrompt).toContain(
+      'CONVERSATION HISTORY:\n[{"role":"user","text":"m3"},{"role":"assistant","text":"m4"}]',
+    );
+  });
+
+  it('hides backend-known ids from tool schemas and injects them on execution', async () => {
+    process.env.AGENT_MAX_CAP = '5';
+    process.env.AGENT_HISTORY_CAP = '10';
+
+    let capturedPrompt = '';
+    let executedInput: Record<string, unknown> | null = null;
+    const appEventEmitter = {
+      async emitEvent() {
+        return undefined;
+      },
+    };
+    const service = new AgentService(
+      {
+        listTools() {
+          return [
+            {
+              name: 'drug_info',
+              description: 'Drug info tool',
+              inputType: 'DrugInfoInput',
+              outputType: 'DrugInfoOutput',
+              inputSchema: {
+                type: 'object',
+                required: ['userId', 'symptoms'],
+                properties: {
+                  userId: { type: 'string' },
+                  symptoms: { type: 'string' },
+                },
+              },
+            },
+          ];
+        },
+        async executeTool(_name: string, input: Record<string, unknown>) {
+          executedInput = input;
+
+          return {
+            ok: true,
+          };
+        },
+      } as never,
+      {
+        createCalls: 0,
+        async createJsonResponse(prompt: string) {
+          this.createCalls += 1;
+
+          if (this.createCalls === 1) {
+            capturedPrompt = prompt;
+
+            return {
+              content: JSON.stringify({
+                thought: 'use tool',
+                action: 'drug_info',
+                input: { symptoms: 'sore throat' },
+                answer: '',
+              }),
+              totalTokens: 8,
+            };
+          }
+
+          return {
+            content: JSON.stringify({
+              thought: 'done',
+              action: 'final_answer',
+              input: {},
+              answer: 'Short answer',
+            }),
+            totalTokens: 5,
+          };
+        },
+        async *streamTextResponse() {
+          yield 'Done';
+
+          return {
+            content: 'Done',
+            totalTokens: 3,
+          };
+        },
+      } as never,
+      {
+        async findByConversationId() {
+          return [];
+        },
+      } as never,
+      appEventEmitter as never,
+    );
+
+    for await (const event of service.streamResponse({
+      userId: '507f1f77bcf86cd799439011',
+      conversationId: '507f1f77bcf86cd799439012',
+      runId: '507f1f77bcf86cd799439013',
+      message: 'I have a sore throat',
+    })) {
+      if (event.type === 'message.completed') {
+        break;
+      }
+    }
+
+    expect(capturedPrompt).toContain('"required":["symptoms"]');
+    expect(capturedPrompt).not.toContain('"userId"');
+    expect(executedInput).toEqual({
+      symptoms: 'sore throat',
+      userId: '507f1f77bcf86cd799439011',
+      conversationId: '507f1f77bcf86cd799439012',
+      runId: '507f1f77bcf86cd799439013',
+    });
+  });
+
+  it('emits a rendering warning and falls back to the safe brief when final streaming fails', async () => {
+    process.env.AGENT_MAX_CAP = '5';
+    process.env.AGENT_HISTORY_CAP = '10';
+
+    const service = new AgentService(
+      {
+        listTools() {
+          return [];
+        },
+        async executeTool() {
+          return {};
+        },
+      } as never,
+      {
+        async createJsonResponse() {
+          return {
+            content: JSON.stringify({
+              thought: 'done',
+              action: 'final_answer',
+              input: {},
+              answer: 'Fallback safe brief',
+            }),
+            totalTokens: 9,
+          };
+        },
+        async *streamTextResponse() {
+          throw new Error('stream failed');
+        },
+      } as never,
+      {
+        async findByConversationId() {
+          return [];
+        },
+      } as never,
+      {
+        async emitEvent() {
+          return undefined;
+        },
+      } as never,
+    );
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+
+    for await (const event of service.streamResponse({
+      userId: '507f1f77bcf86cd799439011',
+      conversationId: '507f1f77bcf86cd799439012',
+      runId: '507f1f77bcf86cd799439013',
+      message: 'Need fallback',
+    })) {
+      events.push(event);
+    }
+
+    expect(events[0]).toEqual({
+      type: 'run.warning',
+      error: expect.objectContaining({
+        code: 'LLM_RENDERING_FAILED',
+        stage: 'rendering',
+      }),
+    });
+    expect(events.some((event) => event.type === 'message.completed')).toBe(true);
+    expect(events.at(-2)).toEqual({
+      type: 'message.completed',
+      message: 'Fallback safe brief',
+    });
+  });
+
+  it('persists structured tool errors without failing the run', async () => {
+    process.env.AGENT_MAX_CAP = '5';
+    process.env.AGENT_HISTORY_CAP = '10';
+
+    const appEventEmitter = {
+      emitCalls: [] as Array<Record<string, unknown>>,
+      async emitEvent(input: Record<string, unknown>) {
+        this.emitCalls.push(input);
+      },
+    };
+
+    const service = new AgentService(
+      {
+        listTools() {
+          return [
+            {
+              name: 'lookup',
+              description: 'Lookup tool',
+              inputType: 'LookupInput',
+              outputType: 'LookupOutput',
+              inputSchema: { type: 'object' },
+            },
+          ];
+        },
+        async executeTool() {
+          throw new Error('tool exploded');
+        },
+      } as never,
+      {
+        createCalls: 0,
+        async createJsonResponse() {
+          this.createCalls += 1;
+
+          return {
+            content:
+              this.createCalls === 1
+                ? JSON.stringify({
+                    thought: 'need tool',
+                    action: 'lookup',
+                    input: { query: 'cough' },
+                    answer: '',
+                  })
+                : JSON.stringify({
+                    thought: 'done',
+                    action: 'final_answer',
+                    input: {},
+                    answer: 'Continue with limited data',
+                  }),
+            totalTokens: 8,
+          };
+        },
+        async *streamTextResponse() {
+          yield 'Continue with limited data';
+
+          return {
+            content: 'Continue with limited data',
+            totalTokens: 4,
+          };
+        },
+      } as never,
+      {
+        async findByConversationId() {
+          return [];
+        },
+      } as never,
+      appEventEmitter as never,
+    );
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+
+    for await (const event of service.streamResponse({
+      userId: '507f1f77bcf86cd799439011',
+      conversationId: '507f1f77bcf86cd799439012',
+      runId: '507f1f77bcf86cd799439013',
+      message: 'Need help',
+    })) {
+      events.push(event);
+    }
+
+    expect(events[1]).toEqual({
+      type: 'tool.call.completed',
+      toolName: 'lookup',
+      output: {
+        error: 'One of the assistant tools failed, so the answer may use limited data.',
+        appError: expect.objectContaining({
+          code: 'TOOL_EXECUTION_FAILED',
+          stage: 'tool',
+        }),
+      },
+    });
+    expect(
+      appEventEmitter.emitCalls.some(
+        (call) =>
+          call.type === 'tool_result' &&
+          call.payload?.errorCode === 'TOOL_EXECUTION_FAILED' &&
+          call.payload?.errorStage === 'tool',
+      ),
+    ).toBe(true);
+  });
+});

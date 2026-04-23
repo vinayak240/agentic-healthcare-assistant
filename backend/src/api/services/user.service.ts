@@ -11,7 +11,13 @@ import type { User } from '../../dal/schemas/user.schema';
 export class UserService {
   constructor(private readonly usersRepository: UsersRepository) {}
 
-  async createUser(input: { name: string; email: string }) {
+  async createUser(input: {
+    name: string;
+    email: string;
+    allergies?: string[];
+    medicalConditions?: string[];
+    medicalHistory?: string[];
+  }) {
     const normalizedEmail = input.email.trim().toLowerCase();
     const existingUser = await this.usersRepository.findByEmail(normalizedEmail);
 
@@ -22,6 +28,9 @@ export class UserService {
     const user = await this.usersRepository.create({
       name: input.name.trim(),
       email: normalizedEmail,
+      allergies: this.normalizeStringList(input.allergies),
+      medicalConditions: this.normalizeStringList(input.medicalConditions),
+      medicalHistory: this.normalizeStringList(input.medicalHistory),
     });
 
     return this.serializeUser(user);
@@ -60,8 +69,17 @@ export class UserService {
       id: user._id.toString(),
       name: user.name,
       email: user.email,
+      allergies: this.normalizeStringList(user.allergies),
+      medicalConditions: this.normalizeStringList(user.medicalConditions),
+      medicalHistory: this.normalizeStringList(user.medicalHistory),
       createdAt: user.cudFoil.createdAt?.toISOString() ?? null,
       updatedAt: user.cudFoil.updatedAt?.toISOString() ?? null,
     };
+  }
+
+  private normalizeStringList(values: string[] | undefined): string[] {
+    return Array.isArray(values)
+      ? values.map((value) => value.trim()).filter((value) => value.length > 0)
+      : [];
   }
 }

@@ -1,8 +1,50 @@
+import type { AppError } from '../common/errors/app-error';
+
 export interface AgentRunContext {
   userId: string;
   conversationId: string;
   runId: string;
   message: string;
+}
+
+export interface AgentMessage {
+  role: 'system' | 'user' | 'assistant';
+  text: string;
+}
+
+export interface AgentTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  execute(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+}
+
+export interface AgentStep {
+  thought: string;
+  action: string;
+  input: Record<string, unknown>;
+  answer: string;
+}
+
+export interface AgentToolObservation {
+  toolName: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+}
+
+export interface RunAgentInput {
+  llm: (prompt: string) => Promise<string>;
+  tools: AgentTool[];
+  history: AgentMessage[];
+  userMessage: string;
+  stream: (chunk: string) => void;
+}
+
+export interface RunAgentResult {
+  finalAction: string;
+  finalAnswerBrief: string;
+  toolObservations: AgentToolObservation[];
+  iterationsUsed: number;
 }
 
 export type AgentEvent =
@@ -27,4 +69,8 @@ export type AgentEvent =
   | {
       type: 'usage.final';
       totalTokens: number;
+    }
+  | {
+      type: 'run.warning';
+      error: AppError;
     };

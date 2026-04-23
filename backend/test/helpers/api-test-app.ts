@@ -21,6 +21,7 @@ import { MessagesRepository } from '../../src/dal/repositories/messages.reposito
 import { RunsRepository } from '../../src/dal/repositories/runs.repository';
 import { UsagesRepository } from '../../src/dal/repositories/usages.repository';
 import { UsersRepository } from '../../src/dal/repositories/users.repository';
+import { AppEventEmitter } from '../../src/events/emitter/event.emitter';
 
 type WithId<T> = T & {
   _id: {
@@ -64,10 +65,16 @@ export interface MockRepositories {
   };
   usagesRepository: {
     create: MockFunction<[Record<string, unknown>], Promise<unknown>>;
+    upsertByRunId: MockFunction<[Record<string, unknown>], Promise<unknown>>;
     findByRunId: MockFunction<[string], Promise<unknown>>;
     findByUserIdAndRange: MockFunction<[Record<string, unknown>], Promise<unknown[]>>;
     createCalls: Array<Record<string, unknown>>;
+    upsertCalls: Array<Record<string, unknown>>;
     rangeCalls: Array<Record<string, unknown>>;
+  };
+  appEventEmitter: {
+    emitEvent: MockFunction<[Record<string, unknown>], Promise<void>>;
+    emitCalls: Array<Record<string, unknown>>;
   };
   usersRepository: {
     create: MockFunction<[Record<string, unknown>], Promise<unknown>>;
@@ -78,6 +85,7 @@ export interface MockRepositories {
     findByEmailCalls: string[];
   };
   agentService: {
+    assertReady: () => void;
     streamResponse: AgentService['streamResponse'];
     calls: Array<Record<string, unknown>>;
   };
@@ -155,6 +163,9 @@ export async function createApiTestContext() {
       return createDocument(TEST_IDS.userId, {
         name: input.name,
         email: input.email,
+        allergies: input.allergies ?? [],
+        medicalConditions: input.medicalConditions ?? [],
+        medicalHistory: input.medicalHistory ?? [],
         cudFoil: {
           createdAt: now,
           updatedAt: now,
@@ -171,6 +182,9 @@ export async function createApiTestContext() {
       return createDocument(TEST_IDS.userId, {
         name: 'Test User',
         email: 'test@example.com',
+        allergies: [],
+        medicalConditions: [],
+        medicalHistory: [],
         cudFoil: {
           createdAt: now,
           updatedAt: now,
@@ -189,6 +203,9 @@ export async function createApiTestContext() {
       return createDocument(TEST_IDS.userId, {
         name: 'Test User',
         email: 'test@example.com',
+        allergies: [],
+        medicalConditions: [],
+        medicalHistory: [],
         cudFoil: {
           createdAt: now,
           updatedAt: now,
@@ -202,6 +219,9 @@ export async function createApiTestContext() {
         createDocument(TEST_IDS.userId, {
           name: 'Test User',
           email: 'test@example.com',
+          allergies: [],
+          medicalConditions: [],
+          medicalHistory: [],
           cudFoil: {
             createdAt: now,
             updatedAt: now,
@@ -311,9 +331,26 @@ export async function createApiTestContext() {
 
   const usagesRepository = {
     createCalls: [] as Array<Record<string, unknown>>,
+    upsertCalls: [] as Array<Record<string, unknown>>,
     rangeCalls: [] as Array<Record<string, unknown>>,
     async create(input: Record<string, unknown>) {
       usagesRepository.createCalls.push(input);
+
+      return createDocument(TEST_IDS.usageId, {
+        userId: input.userId,
+        conversationId: input.conversationId,
+        runId: input.runId,
+        totalTokens: input.totalTokens,
+        cudFoil: {
+          createdAt: now,
+          updatedAt: now,
+          deleted: false,
+          deletedAt: null,
+        },
+      });
+    },
+    async upsertByRunId(input: Record<string, unknown>) {
+      usagesRepository.upsertCalls.push(input);
 
       return createDocument(TEST_IDS.usageId, {
         userId: input.userId,
@@ -378,8 +415,18 @@ export async function createApiTestContext() {
     },
   };
 
+  const appEventEmitter = {
+    emitCalls: [] as Array<Record<string, unknown>>,
+    async emitEvent(input: Record<string, unknown>) {
+      appEventEmitter.emitCalls.push(input);
+    },
+  };
+
   const agentService = {
     calls: [] as Array<Record<string, unknown>>,
+    assertReady() {
+      return undefined;
+    },
     async *streamResponse(context: {
       userId: string;
       conversationId: string;
@@ -443,6 +490,7 @@ export async function createApiTestContext() {
       { provide: UsagesRepository, useValue: usagesRepository },
       { provide: UsersRepository, useValue: usersRepository },
       { provide: AgentService, useValue: agentService },
+      { provide: AppEventEmitter, useValue: appEventEmitter },
     ],
   }).compile();
 
@@ -476,6 +524,7 @@ export async function createApiTestContext() {
       messagesRepository,
       runsRepository,
       usagesRepository,
+      appEventEmitter,
       usersRepository,
       agentService,
     } satisfies MockRepositories,
