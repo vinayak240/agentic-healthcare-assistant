@@ -18,10 +18,13 @@ type CreateInput<TEntity> = Omit<TEntity, 'cudFoil'> & {
 };
 
 export abstract class BaseRepository<TEntity extends SoftDeletable> {
-  protected constructor(private readonly model: Model<TEntity>) {}
+  protected constructor(protected readonly model: Model<TEntity>) {}
 
   async create(input: CreateInput<TEntity>): Promise<HydratedDocument<TEntity>> {
-    return this.model.create(input);
+    return this.model.create({
+      ...input,
+      cudFoil: this.withDefaultCudFoil(input.cudFoil),
+    });
   }
 
   async findById(id: string): Promise<HydratedDocument<TEntity> | null> {
@@ -70,5 +73,12 @@ export abstract class BaseRepository<TEntity extends SoftDeletable> {
       'cudFoil.deleted': false,
     };
   }
-}
 
+  private withDefaultCudFoil(cudFoil?: Partial<CudFoil>): Partial<CudFoil> {
+    return {
+      deleted: false,
+      deletedAt: null,
+      ...cudFoil,
+    };
+  }
+}
