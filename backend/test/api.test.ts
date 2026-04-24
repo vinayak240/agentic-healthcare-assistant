@@ -66,6 +66,89 @@ describe('API layer', () => {
     expect(ctx.mocks.agentService.calls).toHaveLength(1);
   });
 
+  it('POST /chat persists an agent-generated title for new untitled conversations', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    ctx.mocks.agentService.streamResponse = async function* () {
+      yield {
+        type: 'conversation.title.generated' as const,
+        title: 'Medication Schedule Safety Advice',
+      };
+      yield {
+        type: 'message.completed' as const,
+        message: 'Mock assistant reply',
+      };
+      yield {
+        type: 'usage.final' as const,
+        totalTokens: 144,
+      };
+    };
+
+    const body = await validateDto(
+      ctx.validationPipe,
+      {
+        userId: TEST_IDS.userId,
+        message: 'I need help with my medication schedule',
+      },
+      { type: 'body', metatype: ChatRequestDto, data: '' },
+    );
+
+    const response = await ctx.controllers.chat.createChatMessage(body);
+
+    expect(response.conversation.title).toBe('Medication Schedule Safety Advice');
+    expect(ctx.mocks.conversationsRepository.updateCalls).toContainEqual({
+      id: TEST_IDS.conversationId,
+      update: {
+        $set: {
+          title: 'Medication Schedule Safety Advice',
+        },
+      },
+    });
+  });
+
+  it('POST /chat preserves a request-provided title over the generated title', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    ctx.mocks.agentService.streamResponse = async function* () {
+      yield {
+        type: 'conversation.title.generated' as const,
+        title: 'Generated Medication Schedule Advice',
+      };
+      yield {
+        type: 'message.completed' as const,
+        message: 'Mock assistant reply',
+      };
+      yield {
+        type: 'usage.final' as const,
+        totalTokens: 144,
+      };
+    };
+
+    const body = await validateDto(
+      ctx.validationPipe,
+      {
+        userId: TEST_IDS.userId,
+        message: 'I need help with my medication schedule',
+        title: 'My medication plan',
+      },
+      { type: 'body', metatype: ChatRequestDto, data: '' },
+    );
+
+    const response = await ctx.controllers.chat.createChatMessage(body);
+
+    expect(response.conversation.title).toBe('My medication plan');
+    expect(ctx.mocks.conversationsRepository.updateCalls).not.toContainEqual({
+      id: TEST_IDS.conversationId,
+      update: {
+        $set: {
+          title: 'Generated Medication Schedule Advice',
+        },
+      },
+    });
+  });
+
   it('POST /chat fails fast when the user does not exist', async () => {
     const ctx = await createApiTestContext();
     moduleRef = ctx.moduleRef;
@@ -637,6 +720,52 @@ describe('API layer', () => {
     });
   });
 
+  it('DELETE /conversations/:id cascades soft deletes for messages and runs', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const params = await validateDto(
+      ctx.validationPipe,
+      { id: TEST_IDS.conversationId },
+      { type: 'param', metatype: ConversationIdParamDto, data: '' },
+    );
+
+    const response = await ctx.controllers.conversation.deleteConversation(params);
+
+    expect(response).toEqual({
+      id: TEST_IDS.conversationId,
+      deleted: true,
+    });
+    expect(ctx.mocks.messagesRepository.conversationDeleteCalls).toEqual([
+      TEST_IDS.conversationId,
+    ]);
+    expect(ctx.mocks.runsRepository.conversationDeleteCalls).toEqual([
+      TEST_IDS.conversationId,
+    ]);
+    expect(ctx.mocks.conversationsRepository.deleteCalls).toEqual([
+      TEST_IDS.conversationId,
+    ]);
+  });
+
+  it('DELETE /conversations/:id rejects missing conversations', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const missingConversationId = '507f1f77bcf86cd799439099';
+    const params = await validateDto(
+      ctx.validationPipe,
+      { id: missingConversationId },
+      { type: 'param', metatype: ConversationIdParamDto, data: '' },
+    );
+
+    await expect(ctx.controllers.conversation.deleteConversation(params)).rejects.toThrow(
+      'Conversation not found',
+    );
+    expect(ctx.mocks.messagesRepository.conversationDeleteCalls).toEqual([]);
+    expect(ctx.mocks.runsRepository.conversationDeleteCalls).toEqual([]);
+    expect(ctx.mocks.conversationsRepository.deleteCalls).toEqual([]);
+  });
+
   it('POST /conversations/:id/appointment-follow-up persists an assistant confirmation note', async () => {
     const ctx = await createApiTestContext();
     moduleRef = ctx.moduleRef;
@@ -720,6 +849,18 @@ describe('API layer', () => {
 
     expect(response?.runId).toBe(TEST_IDS.runId);
     expect(response?.totalTokens).toBe(144);
+  });
+
+  it('GET /usage/global returns app-wide usage with the configured token limit', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const response = await ctx.controllers.usage.getGlobalUsage();
+
+    expect(response).toEqual({
+      totalTokens: 200,
+      limitTokens: 200_000,
+    });
   });
 
   it('GET /usage/user/:userId returns aggregated usage and passes the date range to the repository', async () => {

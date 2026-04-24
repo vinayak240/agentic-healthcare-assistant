@@ -25,6 +25,7 @@ export interface AgentStep {
   action: string;
   input: Record<string, unknown>;
   answer: string;
+  conversationTitle?: string;
 }
 
 export interface AgentToolObservation {
@@ -50,6 +51,7 @@ export interface RunAgentInput {
 export interface RunAgentResult {
   finalAction: string;
   finalAnswerBrief: string;
+  conversationTitle?: string;
   toolObservations: AgentToolObservation[];
   iterationsUsed: number;
 }
@@ -66,6 +68,10 @@ export type AgentEvent =
   | {
       type: 'message.completed';
       message: string;
+    }
+  | {
+      type: 'conversation.title.generated';
+      title: string;
     }
   | {
       type: 'tool.call.started';

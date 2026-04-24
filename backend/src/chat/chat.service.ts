@@ -196,6 +196,7 @@ export class ChatService {
     let assistantText = '';
     let completedMessage: string | null = null;
     let totalTokens: number | null = null;
+    let generatedConversationTitle: string | null = null;
     const warnings: AppError[] = [];
 
     try {
@@ -224,6 +225,10 @@ export class ChatService {
 
         if (agentEvent.type === 'usage.final') {
           totalTokens = agentEvent.totalTokens;
+        }
+
+        if (agentEvent.type === 'conversation.title.generated') {
+          generatedConversationTitle = this.normalizeConversationTitle(agentEvent.title) ?? null;
         }
 
         if (agentEvent.type === 'run.warning') {
@@ -270,6 +275,19 @@ export class ChatService {
           lastMessageAt: endedAt,
         },
       });
+
+      const conversationTitleOverride =
+        !preparedRequest.conversation && !request.title?.trim()
+          ? generatedConversationTitle ?? undefined
+          : undefined;
+
+      if (conversationTitleOverride) {
+        await this.conversationsRepository.updateById(conversationId, {
+          $set: {
+            title: conversationTitleOverride,
+          },
+        });
+      }
 
       void this.appEventEmitter.emitEvent({
         userId: request.userId,
@@ -324,7 +342,11 @@ export class ChatService {
       });
 
       const response = {
-        conversation: this.serializeConversation(conversation, endedAt),
+        conversation: this.serializeConversation(
+          conversation,
+          endedAt,
+          conversationTitleOverride,
+        ),
         run: this.serializeCompletedRun(completedRun ?? run, endedAt),
         assistantMessage: this.serializeAssistantMessage(assistantMessage),
         warnings,
@@ -426,6 +448,22 @@ export class ChatService {
     return `${trimmed.slice(0, 57)}...`;
   }
 
+  private normalizeConversationTitle(value: string): string | undefined {
+    const trimmed = value.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
+
+    if (!trimmed || trimmed.length > 60) {
+      return undefined;
+    }
+
+    const words = trimmed.split(/\s+/).filter(Boolean);
+
+    if (words.length === 0 || words.length > 6) {
+      return undefined;
+    }
+
+    return words.join(' ');
+  }
+
   private resolveModelName(): string {
     return process.env.OPENAI_MODEL ?? 'gpt-4.1-mini';
   }
@@ -446,6 +484,10 @@ export class ChatService {
       case 'message.completed':
         return createSseEvent(runId, event.type, {
           message: event.message,
+        });
+      case 'conversation.title.generated':
+        return createSseEvent(runId, event.type, {
+          title: event.title,
         });
       case 'tool.call.started':
         return createSseEvent(runId, event.type, {
@@ -472,11 +514,12 @@ export class ChatService {
   private serializeConversation(
     conversation: HydratedDocument<Conversation>,
     lastMessageAt: Date,
+    titleOverride?: string,
   ): ChatResponse['conversation'] {
     return {
       id: this.getDocumentId(conversation),
       userId: String(conversation.userId),
-      title: conversation.title,
+      title: titleOverride ?? conversation.title,
       lastMessageAt: lastMessageAt.toISOString(),
       createdAt: conversation.cudFoil.createdAt?.toISOString() ?? null,
       updatedAt: conversation.cudFoil.updatedAt?.toISOString() ?? null,

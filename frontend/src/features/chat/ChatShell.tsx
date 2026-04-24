@@ -4,9 +4,11 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type MouseEvent,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { AppBrand, NurseLogo } from '../../components/AppLogo';
 import { apiClient } from '../../lib/api/client';
 import type {
   AppointmentFollowUpConfirmationMetadata,
@@ -17,6 +19,7 @@ import type {
   MessageAudioMetadata,
   MessageMetadata,
   User,
+  UserUsageResponse,
 } from '../../lib/api/types';
 
 type TimelineItem =
@@ -138,6 +141,7 @@ const VOICE_UNSUPPORTED_MESSAGE = 'Voice input is not supported in this browser.
 const VOICE_PERMISSION_MESSAGE =
   'Microphone access was blocked. Please allow microphone permissions and try again.';
 const AUTO_SPEAK_STORAGE_KEY = 'medibuddy:auto-speak';
+const GLOBAL_TOKEN_LIMIT = 200_000;
 
 function createId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -155,6 +159,16 @@ function deriveConversationTitle(message: string): string {
   }
 
   return `${trimmed.slice(0, 57)}...`;
+}
+
+function formatConversationCardTitle(title: string): string {
+  const words = title.trim().split(/\s+/).filter(Boolean);
+
+  if (words.length <= 5) {
+    return title;
+  }
+
+  return `${words.slice(0, 5).join(' ')}...`;
 }
 
 function mergeVoiceComposerText(baseText: string, transcript: string): string {
@@ -195,6 +209,22 @@ function formatDateTime(value?: string | null): string {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+function formatTokenCount(value: number): string {
+  if (value >= 1000) {
+    const thousands = value / 1000;
+    const formatted = Number.isInteger(thousands)
+      ? thousands.toLocaleString()
+      : thousands.toLocaleString(undefined, {
+          maximumFractionDigits: 1,
+          minimumFractionDigits: 1,
+        });
+
+    return `${formatted}K`;
+  }
+
+  return value.toLocaleString();
 }
 
 function serializeData(value: unknown): string {
@@ -734,6 +764,9 @@ function MessageMetadataRow({
   audioActionBusy,
   audioActionLabel,
   onAudioAction,
+  hasDeleteAction,
+  deleteActionBusy,
+  onDeleteAction,
 }: {
   createdAt?: string | null;
   metadata?: MessageMetadata;
@@ -748,14 +781,14 @@ function MessageMetadataRow({
   audioActionBusy?: boolean;
   audioActionLabel?: string;
   onAudioAction?: () => void;
+  hasDeleteAction?: boolean;
+  deleteActionBusy?: boolean;
+  onDeleteAction?: () => void;
 }) {
   const safeMetadata = isMessageGenerationMetadata(metadata) ? metadata : null;
   const parts = [
     formatDateTime(createdAt),
     safeMetadata?.modelName,
-    typeof safeMetadata?.totalTokens === 'number'
-      ? `${safeMetadata.totalTokens.toLocaleString()} tokens`
-      : undefined,
     typeof safeMetadata?.costUsd === 'number'
       ? `$${safeMetadata.costUsd.toFixed(4)}`
       : undefined,
@@ -792,6 +825,18 @@ function MessageMetadataRow({
           className="text-inherit underline underline-offset-2 transition hover:text-[#4d69c5] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {audioActionBusy ? 'Preparing voice' : audioActionLabel ?? 'Play voice'}
+        </button>
+      )}
+      {hasDeleteAction && (
+        <button
+          type="button"
+          onClick={onDeleteAction}
+          disabled={deleteActionBusy}
+          className={`text-rose-500 underline underline-offset-2 transition hover:text-rose-600 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-50 ${
+            deleteActionBusy ? 'opacity-100' : 'opacity-0 group-hover/message-row:opacity-100'
+          }`}
+        >
+          {deleteActionBusy ? 'Deleting' : 'Delete'}
         </button>
       )}
     </div>
@@ -975,7 +1020,11 @@ function AppointmentHandoffCard({
           </p>
           <h4 className="mt-2 text-base font-semibold text-slate-950">Appointment handoff</h4>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            MediBuddy found contact options, but a person still needs to complete the appointment request.
+            <span className="inline-flex items-center gap-1.5 font-semibold text-[#4d69c5]">
+              <NurseLogo className="h-4 w-4" />
+              <span>MediBuddy</span>
+            </span>{' '}
+            found contact options, but a person still needs to complete the appointment request.
           </p>
         </div>
 
@@ -1101,6 +1150,61 @@ function PlusIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 24 24"
+      fill="none"
+    >
+      <path
+        d="M4.75 7.25h14.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M9.25 7.25V5.75A1.75 1.75 0 0 1 11 4h2a1.75 1.75 0 0 1 1.75 1.75v1.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M7.25 7.25l.65 10.1A2.75 2.75 0 0 0 10.64 20h2.72a2.75 2.75 0 0 0 2.74-2.65l.65-10.1"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M10.5 11v5M13.5 11v5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ConversationIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path
+        d="M5.75 5.25h12.5A2.75 2.75 0 0 1 21 8v6.25A2.75 2.75 0 0 1 18.25 17H11l-4.5 3.25V17h-.75A2.75 2.75 0 0 1 3 14.25V8a2.75 2.75 0 0 1 2.75-2.75Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7.75 9.25h8.5M7.75 12.75h5.75"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function LogoutIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
@@ -1128,6 +1232,9 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
   const [expandedToolActivityIds, setExpandedToolActivityIds] = useState<Record<string, boolean>>({});
   const [expandedReasoningIds, setExpandedReasoningIds] = useState<Record<string, boolean>>({});
   const [deletingMessageIds, setDeletingMessageIds] = useState<Record<string, boolean>>({});
+  const [deletingConversationIds, setDeletingConversationIds] = useState<Record<string, boolean>>({});
+  const [conversationPendingDelete, setConversationPendingDelete] =
+    useState<ConversationSummary | null>(null);
   const [appointmentFollowUpSubmittingRunIds, setAppointmentFollowUpSubmittingRunIds] = useState<
     Record<string, boolean>
   >({});
@@ -1150,7 +1257,9 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
       typeof window !== 'undefined' &&
       Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition),
   );
-  const [usageTokens, setUsageTokens] = useState<number | null>(null);
+  const [userUsage, setUserUsage] = useState<Pick<UserUsageResponse, 'totalTokens'>>({
+    totalTokens: 0,
+  });
   const [activeConversationMeta, setActiveConversationMeta] = useState<ConversationSummary | null>(
     null,
   );
@@ -1166,12 +1275,31 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
   const pendingRef = useRef(pending);
   const backendHealthyRef = useRef(backendHealthy);
   const autoSpeakEnabledRef = useRef(autoSpeakEnabled);
+  const streamingConversationIdRef = useRef<string | null>(null);
 
   const activeConversation = useMemo(
     () =>
       conversations.find((conversation) => conversation.id === selectedConversationId) ??
       activeConversationMeta,
     [activeConversationMeta, conversations, selectedConversationId],
+  );
+  const userUsageLimit = GLOBAL_TOKEN_LIMIT;
+  const userUsagePercent = Math.min(
+    100,
+    Math.round((userUsage.totalTokens / userUsageLimit) * 100),
+  );
+  const conversationTokenTotal = useMemo(
+    () =>
+      timelineItems.reduce((total, item) => {
+        if (item.kind !== 'message' || item.role !== 'assistant') {
+          return total;
+        }
+
+        const metadata = isMessageGenerationMetadata(item.metadata) ? item.metadata : null;
+
+        return total + (metadata?.totalTokens ?? 0);
+      }, 0),
+    [timelineItems],
   );
 
   const requestedAppointmentRunIds = useMemo(() => {
@@ -1190,21 +1318,6 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
     return runIds;
   }, [timelineItems]);
 
-  const latestPlayableAssistantMessage = useMemo(
-    () =>
-      [...timelineItems]
-        .reverse()
-        .find(
-          (item): item is Extract<TimelineItem, { kind: 'message' }> =>
-            item.kind === 'message' &&
-            item.role === 'assistant' &&
-            !item.pending &&
-            isPersistedMessageId(item.id) &&
-            item.text.trim().length > 0,
-        ) ?? null,
-    [timelineItems],
-  );
-
   useEffect(() => {
     pendingRef.current = pending;
   }, [pending]);
@@ -1219,6 +1332,30 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
   useEffect(() => {
     backendHealthyRef.current = backendHealthy;
   }, [backendHealthy]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadUserUsage = async () => {
+      try {
+        const response = await apiClient.getUserUsage(user.id);
+
+        if (active) {
+          setUserUsage({ totalTokens: response.totalTokens });
+        }
+      } catch {
+        if (active) {
+          setUserUsage({ totalTokens: 0 });
+        }
+      }
+    };
+
+    void loadUserUsage();
+
+    return () => {
+      active = false;
+    };
+  }, [user.id]);
 
   useEffect(() => {
     let active = true;
@@ -1272,6 +1409,11 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
       setAudioGeneratingMessageIds({});
       setAutoPlayingMessageId(null);
       setAudioPlaybackRequestIds({});
+      setLoadingMessages(false);
+      return;
+    }
+
+    if (streamingConversationIdRef.current === selectedConversationId) {
       setLoadingMessages(false);
       return;
     }
@@ -1667,14 +1809,6 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
     });
   };
 
-  const handlePlayConversationAudio = () => {
-    if (!latestPlayableAssistantMessage) {
-      return;
-    }
-
-    handlePlayMessageAudio(latestPlayableAssistantMessage);
-  };
-
   const submitMessage = async (message: string) => {
     const nextMessage = message.trim();
 
@@ -1689,13 +1823,13 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
     const assistantMessageId = createId('assistant');
     const conversationTitle = deriveConversationTitle(nextMessage);
     const existingConversationId = selectedConversationId ?? undefined;
+    let streamConversationId = existingConversationId ?? null;
 
     setComposer('');
     setPending(true);
     pendingRef.current = true;
     setError(null);
     setVoiceError(null);
-    setUsageTokens(null);
     setStreamStatus('Starting secure stream');
     activeToolIdsRef.current = {};
     setExpandedToolActivityIds({});
@@ -1729,12 +1863,13 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
           userId: user.id,
           message: nextMessage,
           conversationId: existingConversationId,
-          title: existingConversationId ? undefined : conversationTitle,
         },
         {
           onEvent: (chatEvent: ChatStreamEvent) => {
             switch (chatEvent.type) {
               case 'run.started': {
+                streamConversationId = chatEvent.data.conversationId;
+                streamingConversationIdRef.current = chatEvent.data.conversationId;
                 setSelectedConversationId(chatEvent.data.conversationId);
                 setActiveConversationMeta((current) => ({
                   id: chatEvent.data.conversationId,
@@ -1765,6 +1900,35 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                   }),
                 );
                 setStreamStatus('Assistant is reviewing your request');
+                break;
+              }
+              case 'conversation.title.generated': {
+                const generatedTitle = chatEvent.data.title.trim();
+
+                if (!generatedTitle) {
+                  break;
+                }
+
+                setActiveConversationMeta((current) =>
+                  current
+                    ? {
+                        ...current,
+                        title: generatedTitle,
+                        updatedAt: new Date().toISOString(),
+                      }
+                    : current,
+                );
+                setConversations((current) =>
+                  current.map((conversation) =>
+                    conversation.id === streamConversationId
+                      ? {
+                          ...conversation,
+                          title: generatedTitle,
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : conversation,
+                  ),
+                );
                 break;
               }
               case 'run.completed':
@@ -1897,7 +2061,10 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                 break;
               }
               case 'usage.final':
-                setUsageTokens(chatEvent.data.totalTokens);
+                setUserUsage((current) => ({
+                  ...current,
+                  totalTokens: current.totalTokens + chatEvent.data.totalTokens,
+                }));
                 setTimelineItems((current) =>
                   updateMessageItem(current, assistantMessageId, (item) => ({
                     ...item,
@@ -1938,7 +2105,7 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
         ),
       );
 
-      await refreshConversations(selectedConversationId ?? activeConversationMeta?.id ?? undefined);
+      await refreshConversations(streamConversationId ?? selectedConversationId ?? activeConversationMeta?.id ?? undefined);
     } catch (streamError) {
       const streamMessage = streamError instanceof Error ? streamError.message : 'Chat request failed.';
       setError(streamMessage);
@@ -1958,6 +2125,7 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
         ),
       );
     } finally {
+      streamingConversationIdRef.current = null;
       setPending(false);
       pendingRef.current = false;
     }
@@ -1966,6 +2134,7 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
   const handleNewChat = () => {
     stopVoiceRecognition({ abort: true });
     resetVoiceTranscriptSession();
+    streamingConversationIdRef.current = null;
     setSelectedConversationId(null);
     setActiveConversationMeta(null);
     setTimelineItems([]);
@@ -1975,7 +2144,6 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
     setAudioGeneratingMessageIds({});
     setAutoPlayingMessageId(null);
     setAudioPlaybackRequestIds({});
-    setUsageTokens(null);
     setError(null);
     setStreamStatus('Ready for a new conversation');
   };
@@ -1987,6 +2155,7 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
 
     stopVoiceRecognition({ abort: true });
     resetVoiceTranscriptSession();
+    streamingConversationIdRef.current = null;
     setSelectedConversationId(conversation.id);
     setActiveConversationMeta(conversation);
     setExpandedToolActivityIds({});
@@ -1995,9 +2164,76 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
     setAudioGeneratingMessageIds({});
     setAutoPlayingMessageId(null);
     setAudioPlaybackRequestIds({});
-    setUsageTokens(null);
     setError(null);
     setStreamStatus('Loading conversation');
+  };
+
+  const handleRequestDeleteConversation = (
+    event: MouseEvent<HTMLButtonElement>,
+    conversation: ConversationSummary,
+  ) => {
+    event.stopPropagation();
+
+    if (pending || deletingConversationIds[conversation.id]) {
+      return;
+    }
+
+    setConversationPendingDelete(conversation);
+    setError(null);
+  };
+
+  const handleCancelDeleteConversation = () => {
+    if (conversationPendingDelete && deletingConversationIds[conversationPendingDelete.id]) {
+      return;
+    }
+
+    setConversationPendingDelete(null);
+  };
+
+  const handleConfirmDeleteConversation = async () => {
+    if (!conversationPendingDelete || deletingConversationIds[conversationPendingDelete.id]) {
+      return;
+    }
+
+    const conversation = conversationPendingDelete;
+    const deleteIndex = conversations.findIndex((candidate) => candidate.id === conversation.id);
+
+    setDeletingConversationIds((current) => ({ ...current, [conversation.id]: true }));
+    setError(null);
+
+    try {
+      await apiClient.deleteConversation(conversation.id);
+
+      const remainingConversations = conversations.filter(
+        (candidate) => candidate.id !== conversation.id,
+      );
+      setConversations(remainingConversations);
+      setConversationPendingDelete(null);
+
+      if (selectedConversationId === conversation.id) {
+        const nextConversation =
+          remainingConversations[Math.min(Math.max(deleteIndex, 0), remainingConversations.length - 1)] ??
+          null;
+
+        if (nextConversation) {
+          handleSelectConversation(nextConversation);
+        } else {
+          handleNewChat();
+        }
+      }
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : 'Could not delete that conversation.',
+      );
+    } finally {
+      setDeletingConversationIds((current) => {
+        const next = { ...current };
+        delete next[conversation.id];
+        return next;
+      });
+    }
   };
 
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
@@ -2125,26 +2361,24 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
         <aside className="hidden h-full w-[310px] shrink-0 overflow-hidden rounded-[22px] border border-[#d6e0ff] bg-[linear-gradient(180deg,#e7eeff_0%,#f2f5ff_52%,#eef2ff_100%)] p-4 shadow-[0_24px_70px_rgba(76,97,183,0.16)] ring-1 ring-white/60 lg:flex lg:flex-col">
           <div className="mb-5 flex items-center justify-between gap-3 px-2">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.26em] text-[#6880c7]">
-                MediBuddy
-              </p>
+              <AppBrand className="text-xs font-semibold uppercase tracking-[0.26em] text-[#6880c7]" />
               <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
                 Conversations
               </h1>
             </div>
+            <button
+              type="button"
+              onClick={handleNewChat}
+              disabled={pending}
+              aria-label="New chat"
+              title="New chat"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(135deg,#3867ff_0%,#5c83ff_100%)] text-white shadow-[0_14px_28px_rgba(56,103,255,0.22)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <PlusIcon />
+            </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handleNewChat}
-            disabled={pending}
-            className="mb-4 flex items-center justify-center gap-2 rounded-[14px] bg-[linear-gradient(90deg,#3867ff_0%,#5c83ff_100%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(56,103,255,0.2)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            <PlusIcon />
-            New chat
-          </button>
-
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
             {loadingConversations && (
               <div className="space-y-2">
                 {Array.from({ length: 5 }).map((_, index) => (
@@ -2159,35 +2393,68 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
             {!loadingConversations &&
               conversations.map((conversation) => {
                 const active = conversation.id === selectedConversationId;
+                const deletingConversation = deletingConversationIds[conversation.id];
 
                 return (
-                  <button
+                  <div
                     key={conversation.id}
-                    type="button"
-                    onClick={() => handleSelectConversation(conversation)}
-                    disabled={pending}
-                    className={`group w-full rounded-[16px] border px-4 py-4 text-left transition duration-200 ${
+                    className={`group relative rounded-[14px] transition duration-200 ${
                       active
-                        ? 'border-[#cbd8ff] bg-white shadow-[0_18px_40px_rgba(76,97,183,0.08)]'
-                        : 'border-transparent bg-white/55 hover:-translate-y-0.5 hover:border-white hover:bg-white'
-                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                        ? 'border border-[#cbd8ff] bg-white/80 shadow-sm'
+                        : 'border border-transparent bg-transparent hover:bg-[#dfe7ff]/65'
+                    } ${pending || deletingConversation ? 'opacity-60' : ''}`}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="line-clamp-2 text-sm font-semibold text-slate-900">
-                          {conversation.title}
-                        </p>
-                        <p className="mt-2 text-xs text-slate-500">
-                          {formatTime(conversation.lastMessageAt)}
-                        </p>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectConversation(conversation)}
+                      disabled={pending || deletingConversation}
+                      className="w-full rounded-[14px] px-3.5 py-2 pr-16 text-left disabled:cursor-not-allowed"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span
+                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] transition ${
+                              active
+                                ? 'bg-[#eef3ff] text-[#3867ff]'
+                                : 'bg-transparent text-[#6f80b3] group-hover:text-[#315fe8]'
+                            }`}
+                            aria-hidden="true"
+                          >
+                            <ConversationIcon />
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-[13px] font-semibold leading-5 text-slate-900">
+                              {formatConversationCardTitle(conversation.title)}
+                            </p>
+                          </div>
+                        </div>
+                        <span
+                          className={`h-2.5 w-2.5 shrink-0 rounded-full transition ${
+                            active ? 'bg-[#3867ff]' : 'bg-transparent group-hover:bg-[#cfd9ff]'
+                          }`}
+                        />
                       </div>
-                      <span
-                        className={`mt-1 h-2.5 w-2.5 rounded-full transition ${
-                          active ? 'bg-[#3867ff]' : 'bg-transparent group-hover:bg-[#cfd9ff]'
-                        }`}
-                      />
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => handleRequestDeleteConversation(event, conversation)}
+                      disabled={pending || deletingConversation}
+                      aria-label={`Delete ${formatConversationCardTitle(conversation.title)}`}
+                      title="Delete conversation"
+                      className={`absolute right-2.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-[10px] border border-rose-100 bg-white/95 text-rose-500 shadow-sm transition hover:bg-rose-50 hover:text-rose-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-rose-200 disabled:cursor-not-allowed disabled:opacity-50 ${
+                        deletingConversation ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                      }`}
+                    >
+                      {deletingConversation ? (
+                        <span
+                          className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-200 border-t-rose-500"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <TrashIcon />
+                      )}
+                    </button>
+                  </div>
                 );
               })}
 
@@ -2200,9 +2467,6 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
 
           <div className="mt-4 rounded-[18px] border border-white/70 bg-white/90 p-4 shadow-sm">
             <div className="flex items-start gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-[14px] bg-[linear-gradient(135deg,#3867ff_0%,#7f9bff_100%)] text-lg font-semibold text-white">
-                {user.name.slice(0, 1).toUpperCase()}
-              </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
                 <p className="truncate text-xs text-slate-500">{user.email}</p>
@@ -2217,13 +2481,19 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
               </button>
             </div>
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              <span className="rounded-[12px] bg-[#eef3ff] px-3 py-1 text-[11px] font-semibold text-[#4a66bd]">
-                {user.allergies.length} allergies
-              </span>
-              <span className="rounded-[12px] bg-[#eef3ff] px-3 py-1 text-[11px] font-semibold text-[#4a66bd]">
-                {user.medicalConditions.length} conditions
-              </span>
+            <div className="mt-4 rounded-[14px] bg-[#eef3ff] px-3 py-2">
+              <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-[#4a66bd]">
+                <span>Your Token Usage</span>
+                <span>
+                  {formatTokenCount(userUsage.totalTokens)} / {formatTokenCount(userUsageLimit)}
+                </span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/80">
+                <div
+                  className="h-full rounded-full bg-[#3867ff] transition-all"
+                  style={{ width: `${userUsagePercent}%` }}
+                />
+              </div>
             </div>
           </div>
         </aside>
@@ -2231,18 +2501,26 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
         <section className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-white/70 bg-white/78 shadow-[0_28px_80px_rgba(76,97,183,0.12)] backdrop-blur">
           <header className="border-b border-slate-100/80 px-5 py-4 sm:px-7">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
-                  {activeConversation?.title ?? 'Start a new health conversation'}
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  {activeConversation
-                    ? 'Ask follow-up questions, review tool activity, and continue where you left off.'
-                    : 'Your next message will create a new thread and save it in the sidebar.'}
-                </p>
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-[#eef3ff] text-[#3867ff]">
+                  <ConversationIcon />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="truncate text-2xl font-semibold tracking-tight text-slate-950">
+                    {activeConversation?.title ?? 'Start a new health conversation'}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {activeConversation
+                      ? 'Ask follow-up questions, review tool activity, and continue where you left off.'
+                      : 'Your next message will create a new thread and save it in the sidebar.'}
+                  </p>
+                </div>
               </div>
 
               <div className="flex flex-wrap gap-2">
+                <span className="rounded-[12px] bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
+                  {conversationTokenTotal.toLocaleString()} tokens
+                </span>
                 <label className="inline-flex items-center gap-2 rounded-[12px] bg-[#f7f9ff] px-3 py-1.5 text-xs font-semibold text-[#4d69c5]">
                   <input
                     type="checkbox"
@@ -2252,28 +2530,9 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                   />
                   AI voice
                 </label>
-                <button
-                  type="button"
-                  onClick={handlePlayConversationAudio}
-                  disabled={!latestPlayableAssistantMessage || Boolean(
-                    latestPlayableAssistantMessage &&
-                      audioGeneratingMessageIds[latestPlayableAssistantMessage.id],
-                  )}
-                  className="rounded-[12px] bg-[#f7f9ff] px-3 py-1.5 text-xs font-semibold text-[#4d69c5] transition hover:bg-[#e8eeff] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {latestPlayableAssistantMessage &&
-                  audioGeneratingMessageIds[latestPlayableAssistantMessage.id]
-                    ? 'Preparing voice'
-                    : 'Play latest'}
-                </button>
                 <span className="rounded-[12px] bg-[#eef3ff] px-3 py-1.5 text-xs font-semibold text-[#4d69c5]">
                   {streamStatus}
                 </span>
-                {usageTokens !== null && (
-                  <span className="rounded-[12px] bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
-                    {usageTokens} tokens
-                  </span>
-                )}
               </div>
             </div>
           </header>
@@ -2311,14 +2570,7 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
             ) : timelineItems.length === 0 ? (
               <div className="mx-auto mt-14 max-w-3xl animate-fade-up text-center">
                 <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[16px] bg-[linear-gradient(135deg,#3867ff_0%,#7f9bff_100%)] text-white shadow-[0_16px_36px_rgba(56,103,255,0.2)]">
-                  <svg viewBox="0 0 24 24" fill="none" className="h-8 w-8">
-                    <path
-                      d="M7.5 8.75h9m-9 3.5h6m-8.25 7h9.5a2.5 2.5 0 0 0 2.5-2.5V7.25a2.5 2.5 0 0 0-2.5-2.5h-9.5a2.5 2.5 0 0 0-2.5 2.5v9.5a2.5 2.5 0 0 0 2.5 2.5Z"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                    />
-                  </svg>
+                  <NurseLogo className="h-9 w-9" />
                 </div>
                 <h3 className="mt-6 text-3xl font-semibold tracking-tight text-slate-950">
                   Ask MediBuddy anything about your care
@@ -2353,7 +2605,6 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                   const reasoningExpanded = item.reasoning
                     ? expandedReasoningIds[item.id] === true
                     : false;
-
                   return (
                     <div
                       key={item.id}
@@ -2361,44 +2612,24 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                         item.role === 'user' ? 'justify-end' : 'justify-start'
                       }`}
                     >
-                      <div className="max-w-[85%]">
+                      <div
+                        className={`group/message-row ${
+                          item.role === 'user' ? 'max-w-[min(78%,560px)]' : 'max-w-[85%]'
+                        }`}
+                      >
                         <article
-                          className={`group/message relative rounded-[18px] px-5 py-4 shadow-sm ${
+                          className={`relative rounded-[20px] px-5 py-4 shadow-sm ${
                             item.role === 'user'
-                              ? 'bg-[linear-gradient(135deg,#3867ff_0%,#5880ff_100%)] text-white shadow-[0_16px_32px_rgba(56,103,255,0.2)]'
+                              ? 'border border-[#3564ff] bg-[#4973ff] text-white shadow-[0_16px_32px_rgba(56,103,255,0.2)]'
                               : 'border border-slate-100 bg-white text-slate-800'
                           }`}
                         >
-                          {!item.pending && isPersistedMessageId(item.id) && (
-                            <button
-                              type="button"
-                              onClick={() => void handleDeleteMessage(item)}
-                              disabled={deletingMessageIds[item.id]}
-                              aria-label="Delete message"
-                              className={`absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-[10px] opacity-0 transition group-hover/message:opacity-100 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                item.role === 'user'
-                                  ? 'bg-white/15 text-white/80 hover:bg-white/25'
-                                  : 'bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-600'
-                              }`}
-                            >
-                              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                                <path
-                                  d="M8.75 9.75v7M12 9.75v7M15.25 9.75v7M5.75 6.75h12.5M10 4.25h4a1.5 1.5 0 0 1 1.5 1.5v1H8.5v-1A1.5 1.5 0 0 1 10 4.25ZM7 6.75l.55 11.1a2 2 0 0 0 2 1.9h4.9a2 2 0 0 0 2-1.9L17 6.75"
-                                  stroke="currentColor"
-                                  strokeWidth="1.7"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                              </svg>
-                            </button>
+                          {item.role === 'assistant' && (
+                            <AppBrand
+                              className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[#6f80b3]"
+                              iconClassName="h-3.5 w-3.5"
+                            />
                           )}
-                          <p
-                            className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${
-                              item.role === 'user' ? 'text-white/70' : 'text-[#6f80b3]'
-                            }`}
-                          >
-                            {item.role === 'user' ? 'You' : 'MediBuddy'}
-                          </p>
                           {item.role === 'assistant' ? (
                             item.text ? (
                               <MarkdownMessage text={item.text} />
@@ -2411,7 +2642,9 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                               </p>
                             )
                           ) : (
-                            <p className="mt-3 whitespace-pre-wrap text-sm leading-7">{item.text}</p>
+                            <p className="whitespace-pre-wrap text-[15px] leading-7 text-white/95">
+                              {item.text}
+                            </p>
                           )}
                           {item.pending && (
                             <div className="mt-4 flex items-center gap-2">
@@ -2437,7 +2670,27 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                             audioActionBusy={audioGeneratingMessageIds[item.id]}
                             audioActionLabel={item.audio ? 'Replay voice' : 'Play voice'}
                             onAudioAction={() => handlePlayMessageAudio(item)}
+                            hasDeleteAction={!item.pending && isPersistedMessageId(item.id)}
+                            deleteActionBusy={deletingMessageIds[item.id]}
+                            onDeleteAction={() => void handleDeleteMessage(item)}
                           />
+                        )}
+
+                        {item.role === 'user' && !item.pending && isPersistedMessageId(item.id) && (
+                          <div className="mt-2 flex justify-end text-[11px] font-medium">
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteMessage(item)}
+                              disabled={deletingMessageIds[item.id]}
+                              className={`text-rose-500 underline underline-offset-2 transition hover:text-rose-600 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                deletingMessageIds[item.id]
+                                  ? 'opacity-100'
+                                  : 'opacity-0 group-hover/message-row:opacity-100'
+                              }`}
+                            >
+                              {deletingMessageIds[item.id] ? 'Deleting' : 'Delete'}
+                            </button>
+                          </div>
                         )}
 
                         {item.role === 'assistant' && audioGeneratingMessageIds[item.id] && (
@@ -2515,7 +2768,7 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                   ref={composerRef}
                   value={composer}
                   onChange={(event) => handleComposerChange(event.target.value)}
-                  placeholder="Message MediBuddy about medications, symptoms, or your next appointment..."
+                  placeholder="Message your care assistant about medications, symptoms, or your next appointment..."
                   rows={1}
                   disabled={pending || !backendHealthy}
                   className="max-h-[200px] min-h-[52px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-7 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
@@ -2548,6 +2801,46 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
           </div>
         </section>
       </div>
+
+      {conversationPendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-conversation-title"
+        >
+          <div className="w-full max-w-sm rounded-[18px] border border-white/70 bg-white p-5 shadow-[0_24px_70px_rgba(15,23,42,0.24)]">
+            <h2
+              id="delete-conversation-title"
+              className="text-base font-semibold text-slate-950"
+            >
+              Delete conversation?
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              This will remove "{formatConversationCardTitle(conversationPendingDelete.title)}"
+              from your conversation history.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleCancelDeleteConversation}
+                disabled={deletingConversationIds[conversationPendingDelete.id]}
+                className="rounded-[12px] border border-[#d9e3ff] px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-[#f6f8ff] hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmDeleteConversation()}
+                disabled={deletingConversationIds[conversationPendingDelete.id]}
+                className="rounded-[12px] bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deletingConversationIds[conversationPendingDelete.id] ? 'Deleting' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

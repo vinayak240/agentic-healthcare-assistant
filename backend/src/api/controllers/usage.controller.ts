@@ -6,6 +6,11 @@ import { UsageService } from '../services';
 export class UsageController {
   constructor(private readonly usageService: UsageService) {}
 
+  @Get('global')
+  getGlobalUsage() {
+    return this.usageService.getGlobalUsage();
+  }
+
   @Get('run/:id')
   getRunUsage(@Param() params: RunIdParamDto) {
     return this.usageService.getRunUsage(params.id);

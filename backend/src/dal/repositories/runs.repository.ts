@@ -20,4 +20,21 @@ export class RunsRepository extends BaseRepository<Run> {
       .sort({ startedAt: -1, _id: -1 })
       .exec();
   }
+
+  async softDeleteByConversationId(conversationId: string) {
+    return this.model
+      .updateMany(
+        {
+          conversationId,
+          'cudFoil.deleted': false,
+        },
+        {
+          $set: {
+            'cudFoil.deleted': true,
+            'cudFoil.deletedAt': new Date(),
+          },
+        },
+      )
+      .exec();
+  }
 }

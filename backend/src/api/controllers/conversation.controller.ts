@@ -23,6 +23,13 @@ export class ConversationController {
     return this.conversationService.getConversation(params.id);
   }
 
+  @Delete(':id')
+  deleteConversation(@Param() params: ConversationIdParamDto) {
+    return this.conversationService.deleteConversation({
+      conversationId: params.id,
+    });
+  }
+
   @Get(':id/messages')
   listMessages(@Param() params: ConversationIdParamDto, @Query() query: PaginationDto) {
     return this.conversationService.listMessages({

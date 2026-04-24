@@ -6,6 +6,7 @@ import { ConversationsRepository } from '../../dal/repositories/conversations.re
 import { EventsRepository } from '../../dal/repositories/events.repository';
 import type { MessageCursorInput } from '../../dal/repositories/messages.repository';
 import { MessagesRepository } from '../../dal/repositories/messages.repository';
+import { RunsRepository } from '../../dal/repositories/runs.repository';
 import { UsagesRepository } from '../../dal/repositories/usages.repository';
 import type { MessageAudioMetadata } from '../../dal/interfaces/dal.types';
 import type { Conversation } from '../../dal/schemas/conversation.schema';
@@ -26,6 +27,7 @@ export class ConversationService {
     private readonly messagesRepository: MessagesRepository,
     private readonly eventsRepository: EventsRepository,
     private readonly usagesRepository: UsagesRepository,
+    private readonly runsRepository: RunsRepository,
     private readonly openAiService: OpenAiService,
     private readonly storageService: MinioStorageService,
     @Optional() private readonly logger: LoggerService = new LoggerService(),
@@ -298,6 +300,28 @@ export class ConversationService {
     return {
       id: params.messageId,
       conversationId: params.conversationId,
+      deleted: true,
+    };
+  }
+
+  async deleteConversation(params: { conversationId: string }) {
+    const conversation = await this.conversationsRepository.findById(params.conversationId);
+
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    await this.messagesRepository.softDeleteByConversationId(params.conversationId);
+    await this.runsRepository.softDeleteByConversationId(params.conversationId);
+
+    const deleted = await this.conversationsRepository.softDeleteById(params.conversationId);
+
+    if (!deleted) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    return {
+      id: params.conversationId,
       deleted: true,
     };
   }

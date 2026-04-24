@@ -26,6 +26,22 @@ export interface HealthResponse {
   timestamp: string;
 }
 
+export interface UserUsageResponse {
+  userId: string;
+  from: string | null;
+  to: string | null;
+  totalTokens: number;
+  items: Array<{
+    id: string;
+    userId: string;
+    conversationId: string;
+    runId: string;
+    totalTokens: number;
+    createdAt: string | null;
+    updatedAt: string | null;
+  }>;
+}
+
 export interface ChatRequest {
   userId: string;
   message: string;
@@ -55,6 +71,7 @@ export type ChatStreamEvent =
   | ChatStreamBaseEvent<'reasoning.delta', { delta: string }>
   | ChatStreamBaseEvent<'message.delta', { delta: string }>
   | ChatStreamBaseEvent<'message.completed', { message: string }>
+  | ChatStreamBaseEvent<'conversation.title.generated', { title: string }>
   | ChatStreamBaseEvent<'tool.call.started', { toolName: string; input: unknown }>
   | ChatStreamBaseEvent<'tool.call.completed', { toolName: string; output: unknown }>
   | ChatStreamBaseEvent<'usage.final', { totalTokens: number; modelName?: string; costUsd?: number }>
@@ -162,6 +179,11 @@ export interface ConversationToolEventsResponse {
 export interface DeleteMessageResponse {
   id: string;
   conversationId: string;
+  deleted: true;
+}
+
+export interface DeleteConversationResponse {
+  id: string;
   deleted: true;
 }
 

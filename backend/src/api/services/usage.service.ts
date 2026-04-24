@@ -5,7 +5,18 @@ import type { Usage } from '../../dal/schemas/usage.schema';
 
 @Injectable()
 export class UsageService {
+  private readonly globalTokenLimit = 200_000;
+
   constructor(private readonly usagesRepository: UsagesRepository) {}
+
+  async getGlobalUsage() {
+    const totalTokens = await this.usagesRepository.sumTotalTokens();
+
+    return {
+      totalTokens,
+      limitTokens: this.globalTokenLimit,
+    };
+  }
 
   async getRunUsage(runId: string) {
     const usage = await this.usagesRepository.findByRunId(runId);

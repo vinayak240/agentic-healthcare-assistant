@@ -49,6 +49,26 @@ export class UsagesRepository extends BaseRepository<Usage> {
       .exec();
   }
 
+  async sumTotalTokens(): Promise<number> {
+    const [summary] = await this.model
+      .aggregate<{ totalTokens: number }>([
+        {
+          $match: {
+            'cudFoil.deleted': false,
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            totalTokens: { $sum: '$totalTokens' },
+          },
+        },
+      ])
+      .exec();
+
+    return summary?.totalTokens ?? 0;
+  }
+
   async upsertByRunId(input: {
     userId: string;
     conversationId: string;

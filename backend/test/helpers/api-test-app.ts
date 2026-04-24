@@ -49,9 +49,11 @@ export interface MockRepositories {
     findById: MockFunction<[string], Promise<unknown>>;
     updateById: MockFunction<[string, Record<string, unknown>], Promise<unknown>>;
     findPageByUserId: MockFunction<[Record<string, unknown>], Promise<unknown[]>>;
+    softDeleteById: MockFunction<[string], Promise<unknown>>;
     createCalls: Array<Record<string, unknown>>;
     updateCalls: Array<{ id: string; update: Record<string, unknown> }>;
     listCalls: Array<Record<string, unknown>>;
+    deleteCalls: string[];
   };
   messagesRepository: {
     create: MockFunction<[Record<string, unknown>], Promise<unknown>>;
@@ -59,10 +61,12 @@ export interface MockRepositories {
     findPageByConversationId: MockFunction<[Record<string, unknown>], Promise<unknown[]>>;
     updateById: MockFunction<[string, Record<string, unknown>], Promise<unknown>>;
     softDeleteById: MockFunction<[string], Promise<unknown>>;
+    softDeleteByConversationId: MockFunction<[string], Promise<unknown>>;
     createCalls: Array<Record<string, unknown>>;
     listCalls: Array<Record<string, unknown>>;
     updateCalls: Array<{ id: string; update: Record<string, unknown> }>;
     deleteCalls: string[];
+    conversationDeleteCalls: string[];
   };
   openAiService: {
     createSpeech: MockFunction<[Record<string, unknown>], Promise<Buffer>>;
@@ -80,14 +84,17 @@ export interface MockRepositories {
     create: MockFunction<[Record<string, unknown>], Promise<unknown>>;
     findById: MockFunction<[string], Promise<unknown>>;
     updateById: MockFunction<[string, Record<string, unknown>], Promise<unknown>>;
+    softDeleteByConversationId: MockFunction<[string], Promise<unknown>>;
     createCalls: Array<Record<string, unknown>>;
     updateCalls: Array<{ id: string; update: Record<string, unknown> }>;
+    conversationDeleteCalls: string[];
   };
   usagesRepository: {
     create: MockFunction<[Record<string, unknown>], Promise<unknown>>;
     upsertByRunId: MockFunction<[Record<string, unknown>], Promise<unknown>>;
     findByRunId: MockFunction<[string], Promise<unknown>>;
     findByUserIdAndRange: MockFunction<[Record<string, unknown>], Promise<unknown[]>>;
+    sumTotalTokens: MockFunction<[], Promise<number>>;
     createCalls: Array<Record<string, unknown>>;
     upsertCalls: Array<Record<string, unknown>>;
     rangeCalls: Array<Record<string, unknown>>;
@@ -118,6 +125,7 @@ export async function createApiTestContext() {
     createCalls: [] as Array<Record<string, unknown>>,
     updateCalls: [] as Array<{ id: string; update: Record<string, unknown> }>,
     listCalls: [] as Array<Record<string, unknown>>,
+    deleteCalls: [] as string[],
     async create(input: Record<string, unknown>) {
       conversationsRepository.createCalls.push(input);
 
@@ -171,6 +179,25 @@ export async function createApiTestContext() {
       return [
         createConversationDoc(TEST_IDS.conversationId, 'Follow-up', '2026-04-23T09:00:00.000Z'),
       ];
+    },
+    async softDeleteById(id: string) {
+      conversationsRepository.deleteCalls.push(id);
+
+      if (id !== TEST_IDS.conversationId) {
+        return null;
+      }
+
+      return createDocument(TEST_IDS.conversationId, {
+        userId: TEST_IDS.userId,
+        title: 'Existing conversation',
+        lastMessageAt: now,
+        cudFoil: {
+          createdAt: now,
+          updatedAt: now,
+          deleted: true,
+          deletedAt: now,
+        },
+      });
     },
   };
 
@@ -258,6 +285,7 @@ export async function createApiTestContext() {
     listCalls: [] as Array<Record<string, unknown>>,
     updateCalls: [] as Array<{ id: string; update: Record<string, unknown> }>,
     deleteCalls: [] as string[],
+    conversationDeleteCalls: [] as string[],
     async create(input: Record<string, unknown>) {
       messagesRepository.createCalls.push(input);
 
@@ -320,11 +348,17 @@ export async function createApiTestContext() {
         '2026-04-23T09:03:00.000Z',
       );
     },
+    async softDeleteByConversationId(conversationId: string) {
+      messagesRepository.conversationDeleteCalls.push(conversationId);
+
+      return { modifiedCount: 2 };
+    },
   };
 
   const runsRepository = {
     createCalls: [] as Array<Record<string, unknown>>,
     updateCalls: [] as Array<{ id: string; update: Record<string, unknown> }>,
+    conversationDeleteCalls: [] as string[],
     async create(input: Record<string, unknown>) {
       runsRepository.createCalls.push(input);
 
@@ -385,6 +419,11 @@ export async function createApiTestContext() {
           deletedAt: null,
         },
       });
+    },
+    async softDeleteByConversationId(conversationId: string) {
+      runsRepository.conversationDeleteCalls.push(conversationId);
+
+      return { modifiedCount: 1 };
     },
   };
 
@@ -493,6 +532,9 @@ export async function createApiTestContext() {
           },
         }),
       ];
+    },
+    async sumTotalTokens() {
+      return 200;
     },
   };
 

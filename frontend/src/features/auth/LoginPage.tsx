@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { AppBrand } from '../../components/AppLogo';
 
 interface LoginPageProps {
   onSubmit: (email: string) => Promise<void>;
@@ -30,9 +31,7 @@ export function LoginPage({ onSubmit, pending, error, bootError }: LoginPageProp
           <section className="animate-slide-up rounded-[24px] border border-white/65 bg-white/88 p-6 shadow-[0_32px_100px_rgba(77,98,179,0.14)] backdrop-blur sm:p-8 lg:p-10">
             <header className="mb-8">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#5a6ca8]">
-                  MediBuddy
-                </p>
+                <AppBrand className="text-xs font-semibold uppercase tracking-[0.28em] text-[#5a6ca8]" />
                 <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
                   Welcome back
                 </h1>

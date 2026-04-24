@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { AppBrand, NurseLogo } from '../../components/AppLogo';
 import type { CreateUserInput } from '../../lib/api/types';
 
 interface OnboardingFormProps {
@@ -39,7 +40,7 @@ const steps: StepDefinition[] = [
   {
     key: 'history',
     title: 'Relevant medical history',
-    description: 'Optional, but helps MediBuddy understand context.',
+    description: 'Optional, but helps your assistant understand context.',
     optional: true,
   },
   {
@@ -164,9 +165,7 @@ export function OnboardingForm({
           <section className="animate-slide-up rounded-[24px] border border-white/65 bg-white/88 p-6 shadow-[0_32px_100px_rgba(77,98,179,0.14)] backdrop-blur sm:p-8 lg:p-10">
             <header className="mb-8 flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#5a6ca8]">
-                  MediBuddy
-                </p>
+                <AppBrand className="text-xs font-semibold uppercase tracking-[0.28em] text-[#5a6ca8]" />
                 <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
                   Complete your health profile
                 </h1>
@@ -358,8 +357,12 @@ export function OnboardingForm({
                           Privacy first
                         </p>
                         <p className="mt-1 leading-6 text-slate-500">
-                          Your health details are only used to personalize insights in your
-                          MediBuddy experience.
+                          Your health details are only used to personalize insights in your{' '}
+                          <span className="inline-flex items-center gap-1.5 font-semibold text-[#4c76ef]">
+                            <NurseLogo className="h-4 w-4" />
+                            <span>MediBuddy</span>
+                          </span>{' '}
+                          experience.
                         </p>
                       </div>
                     </div>

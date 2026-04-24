@@ -1,5 +1,6 @@
 import { startTransition, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { AppBrand, NurseLogo } from '../components/AppLogo';
 import { LoginPage } from '../features/auth/LoginPage';
 import { ChatShell } from '../features/chat/ChatShell';
 import { OnboardingForm } from '../features/onboarding/OnboardingForm';
@@ -15,18 +16,9 @@ function LoadingScreen() {
       <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6 py-10">
         <section className="w-full max-w-xl rounded-[32px] border border-white/80 bg-white/85 p-8 text-center shadow-[0_30px_90px_rgba(76,97,183,0.16)] backdrop-blur">
           <div className="mx-auto mb-5 h-14 w-14 rounded-2xl bg-[linear-gradient(135deg,#3867ff_0%,#88a5ff_100%)] p-3 text-white shadow-[0_20px_45px_rgba(56,103,255,0.3)]">
-            <svg viewBox="0 0 24 24" fill="none" className="h-full w-full">
-              <path
-                d="M12 3.75 5.25 6.6v5.07c0 4.18 2.67 8.08 6.75 9.33 4.08-1.25 6.75-5.15 6.75-9.33V6.6L12 3.75Z"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              />
-              <path d="M9.5 12.2h5M12 9.7v5" stroke="currentColor" strokeWidth="1.8" />
-            </svg>
+            <NurseLogo className="h-full w-full" />
           </div>
-          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#3867ff]">
-            MediBuddy
-          </p>
+          <AppBrand className="justify-center text-xs font-semibold uppercase tracking-[0.3em] text-[#3867ff]" />
           <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
             Preparing your care workspace
           </h1>

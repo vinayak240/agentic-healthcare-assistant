@@ -55,4 +55,21 @@ export class MessagesRepository extends BaseRepository<Message> {
       .limit(limit)
       .exec();
   }
+
+  async softDeleteByConversationId(conversationId: string) {
+    return this.model
+      .updateMany(
+        {
+          conversationId,
+          'cudFoil.deleted': false,
+        },
+        {
+          $set: {
+            'cudFoil.deleted': true,
+            'cudFoil.deletedAt': new Date(),
+          },
+        },
+      )
+      .exec();
+  }
 }

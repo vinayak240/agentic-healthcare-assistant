@@ -10,10 +10,12 @@ import type {
   ConversationToolEventsResponse,
   CreateAppointmentFollowUpInput,
   CreateUserInput,
+  DeleteConversationResponse,
   DeleteMessageResponse,
   HealthResponse,
   LoginUserInput,
   User,
+  UserUsageResponse,
 } from './types';
 
 function joinUrl(path: string): string {
@@ -53,6 +55,10 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export const apiClient = {
   getHealth() {
     return requestJson<HealthResponse>('/system/health');
+  },
+
+  getUserUsage(userId: string) {
+    return requestJson<UserUsageResponse>(`/usage/user/${encodeURIComponent(userId)}`);
   },
 
   getUser(userId: string) {
@@ -115,6 +121,12 @@ export const apiClient = {
         method: 'DELETE',
       },
     );
+  },
+
+  deleteConversation(conversationId: string) {
+    return requestJson<DeleteConversationResponse>(`/conversations/${conversationId}`, {
+      method: 'DELETE',
+    });
   },
 
   createMessageAudio(conversationId: string, messageId: string) {
