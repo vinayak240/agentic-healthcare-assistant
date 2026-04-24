@@ -1,0 +1,146 @@
+services:
+  mongo:
+    build:
+      context: .
+      dockerfile: infra/db/Dockerfile
+    image: agentic-healthcare-assistant-mongo:7.0.14
+    container_name: agentic-healthcare-assistant-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
+      APP_DB_NAME: ${APP_DB_NAME:-healtcare-agent-db}
+      APP_DB_USERNAME: ${APP_DB_USERNAME:-app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-healtcare}
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - agentic_healthcare_network
+
+  minio:
+    image: minio/minio:latest
+    container_name: agentic-healthcare-assistant-minio
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin123}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://127.0.0.1:9000/minio/health/live",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+    networks:
+      - agentic_healthcare_network
+
+  backend:
+    build:
+      context: .
+      dockerfile: infra/backend/Dockerfile
+    image: agentic-healthcare-assistant-backend:latest
+    container_name: agentic-healthcare-assistant-backend
+    restart: unless-stopped
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      CORS_ORIGIN: "*"
+      MONGODB_URI: ${MONGODB_URI:-mongodb://app:healtcare@mongo:27017/healtcare-agent-db?authSource=healtcare-agent-db}
+      OPENAI_KEY: ${OPENAI_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+      AGENT_MAX_CAP: ${AGENT_MAX_CAP:-5}
+      AGENT_HISTORY_CAP: ${AGENT_HISTORY_CAP:-10}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-admin123}
+      S3_BUCKET: ${S3_BUCKET:-chat-audio}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bun -e \"const port = process.env.PORT || 8080; const response = await fetch('http://127.0.0.1:' + port + '/system/health'); process.exit(response.ok ? 0 : 1);\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+    networks:
+      - agentic_healthcare_network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+    image: agentic-healthcare-assistant-frontend:latest
+    container_name: agentic-healthcare-assistant-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      PORT: 3000
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const port = process.env.PORT || 3000; fetch('http://127.0.0.1:' + port).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+    networks:
+      - agentic_healthcare_network
+
+volumes:
+  mongo_data:
+  minio_data:
+
+networks:
+  agentic_healthcare_network:
+    driver: bridge

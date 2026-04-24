@@ -56,6 +56,15 @@ export interface ChatStreamBaseEvent<TType extends string, TData extends object>
   data: TData;
 }
 
+export interface ApiErrorBody {
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+  stage?: string;
+  statusCode?: number;
+  details?: Record<string, unknown>;
+}
+
 export type ChatStreamEvent =
   | ChatStreamBaseEvent<'run.started', { conversationId: string; status: string; userMessageId?: string }>
   | ChatStreamBaseEvent<
@@ -75,7 +84,9 @@ export type ChatStreamEvent =
   | ChatStreamBaseEvent<'tool.call.started', { toolName: string; input: unknown }>
   | ChatStreamBaseEvent<'tool.call.completed', { toolName: string; output: unknown }>
   | ChatStreamBaseEvent<'usage.final', { totalTokens: number; modelName?: string; costUsd?: number }>
-  | ChatStreamBaseEvent<'run.warning', { error: { message?: string; code?: string } }>;
+  | ChatStreamBaseEvent<'run.warning', { error: ApiErrorBody }>
+  | ChatStreamBaseEvent<'run.failed', { error: ApiErrorBody }>
+  | ChatStreamBaseEvent<'error', { error: ApiErrorBody; message?: string }>;
 
 export interface ConversationSummary {
   id: string;
@@ -197,6 +208,6 @@ export interface CreateAppointmentFollowUpInput {
 
 export interface ApiErrorPayload {
   message?: string | string[];
-  error?: string;
+  error?: string | ApiErrorBody;
   statusCode?: number;
 }

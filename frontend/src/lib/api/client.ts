@@ -22,15 +22,47 @@ function joinUrl(path: string): string {
   return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function normalizeErrorMessage(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (Array.isArray(value)) {
+    const message = value
+      .map((item) => normalizeErrorMessage(item))
+      .filter((item): item is string => Boolean(item))
+      .join(', ');
+
+    return message.length > 0 ? message : null;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return (
+    normalizeErrorMessage(value.message) ??
+    normalizeErrorMessage(value.error) ??
+    normalizeErrorMessage(value.reason) ??
+    normalizeErrorMessage(value.code)
+  );
+}
+
 async function parseError(response: Response): Promise<string> {
   try {
-    const payload = (await response.json()) as ApiErrorPayload;
+    const payload = (await response.json()) as ApiErrorPayload | unknown;
+    const message = normalizeErrorMessage(payload);
 
-    if (Array.isArray(payload.message)) {
-      return payload.message.join(', ');
+    if (message) {
+      return message;
     }
 
-    return payload.message ?? payload.error ?? `Request failed with status ${response.status}`;
+    return `Request failed with status ${response.status}`;
   } catch {
     return `Request failed with status ${response.status}`;
   }

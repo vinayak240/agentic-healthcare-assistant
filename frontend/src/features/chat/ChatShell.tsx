@@ -2089,6 +2089,15 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                   },
                 ]);
                 break;
+              case 'run.failed':
+              case 'error': {
+                const failureMessage =
+                  ('message' in chatEvent.data ? chatEvent.data.message : undefined) ??
+                  chatEvent.data.error.message ??
+                  'I could not complete that response. Please try again.';
+
+                throw new Error(failureMessage);
+              }
             }
           },
           onComplete: () => {

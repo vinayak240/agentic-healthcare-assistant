@@ -19,6 +19,7 @@ interface UploadObjectInput {
 @Injectable()
 export class MinioStorageService {
   private client: S3Client | null = null;
+  private presignClient: S3Client | null = null;
   private bucketReady = false;
   private readonly logger: LoggerService;
 
@@ -62,7 +63,7 @@ export class MinioStorageService {
     await this.ensureBucket();
 
     return getSignedUrl(
-      this.getClient(),
+      this.getPresignClient(),
       new GetObjectCommand({
         Bucket: this.getBucket(),
         Key: key,
@@ -119,18 +120,34 @@ export class MinioStorageService {
 
   private getClient(): S3Client {
     if (!this.client) {
-      this.client = new S3Client({
-        endpoint: this.configService.get('S3_ENDPOINT') ?? 'http://localhost:9000',
-        region: this.configService.get('S3_REGION') ?? 'us-east-1',
-        forcePathStyle: this.parseBoolean(this.configService.get('S3_FORCE_PATH_STYLE') ?? 'true'),
-        credentials: {
-          accessKeyId: this.configService.get('S3_ACCESS_KEY') ?? 'admin',
-          secretAccessKey: this.configService.get('S3_SECRET_KEY') ?? 'admin123',
-        },
-      });
+      this.client = this.createClient(this.configService.get('S3_ENDPOINT') ?? 'http://localhost:9000');
     }
 
     return this.client;
+  }
+
+  private getPresignClient(): S3Client {
+    if (!this.presignClient) {
+      this.presignClient = this.createClient(
+        this.configService.get('S3_PUBLIC_ENDPOINT')
+          ?? this.configService.get('S3_ENDPOINT')
+          ?? 'http://localhost:9000',
+      );
+    }
+
+    return this.presignClient;
+  }
+
+  private createClient(endpoint: string): S3Client {
+    return new S3Client({
+      endpoint,
+      region: this.configService.get('S3_REGION') ?? 'us-east-1',
+      forcePathStyle: this.parseBoolean(this.configService.get('S3_FORCE_PATH_STYLE') ?? 'true'),
+      credentials: {
+        accessKeyId: this.configService.get('S3_ACCESS_KEY') ?? 'admin',
+        secretAccessKey: this.configService.get('S3_SECRET_KEY') ?? 'admin123',
+      },
+    });
   }
 
   private getBucket(): string {
