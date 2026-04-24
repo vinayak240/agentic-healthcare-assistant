@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent,
   type MouseEvent,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -2251,6 +2252,15 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
     await submitMessage(composer);
   };
 
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey) {
+      return;
+    }
+
+    event.preventDefault();
+    void submitMessage(composer);
+  };
+
   useEffect(() => {
     if (pending || !backendHealthy) {
       stopVoiceRecognition({ abort: true });
@@ -2777,6 +2787,7 @@ export function ChatShell({ user, onLogout, backendHealthy, bootError }: ChatShe
                   ref={composerRef}
                   value={composer}
                   onChange={(event) => handleComposerChange(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
                   placeholder="Message your care assistant about medications, symptoms, or your next appointment..."
                   rows={1}
                   disabled={pending || !backendHealthy}
