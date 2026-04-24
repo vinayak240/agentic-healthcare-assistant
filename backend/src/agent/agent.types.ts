@@ -1,4 +1,5 @@
 import type { AppError } from '../common/errors/app-error';
+import type { LoggerService } from '../logger/logger.service';
 
 export interface AgentRunContext {
   userId: string;
@@ -38,6 +39,12 @@ export interface RunAgentInput {
   history: AgentMessage[];
   userMessage: string;
   stream: (chunk: string) => void;
+  logger?: Pick<LoggerService, 'debug' | 'warn' | 'error'>;
+  runContext?: {
+    userId: string;
+    conversationId: string;
+    runId: string;
+  };
 }
 
 export interface RunAgentResult {

@@ -69,10 +69,8 @@ export class UsagesRepository extends BaseRepository<Usage> {
           },
           $setOnInsert: {
             runId: input.runId,
-            cudFoil: {
-              deleted: false,
-              deletedAt: null,
-            },
+            'cudFoil.deleted': false,
+            'cudFoil.deletedAt': null,
           },
         },
         {

@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import OpenAI from 'openai';
 import {
   createAppException,
   normalizeError,
 } from '../../common/errors/app-error';
 import { ConfigService } from '../../config/config.service';
+import { LoggerService } from '../../logger/logger.service';
 
 interface JsonCompletionResult {
   content: string;
@@ -14,8 +15,16 @@ interface JsonCompletionResult {
 @Injectable()
 export class OpenAiService {
   private client: OpenAI | null = null;
+  private readonly logger: LoggerService;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    @Optional() logger: LoggerService = new LoggerService(),
+  ) {
+    this.logger = logger.child({
+      component: OpenAiService.name,
+    });
+  }
 
   assertConfigured(): void {
     this.getClientOrThrow();
@@ -23,9 +32,19 @@ export class OpenAiService {
 
   async createJsonResponse(prompt: string): Promise<JsonCompletionResult> {
     const client = this.getClientOrThrow();
+    const model = this.configService.get('OPENAI_MODEL') ?? 'gpt-4.1-mini';
+    const startedAt = Date.now();
+
+    this.logger.debug('openai.request.started', {
+      stage: 'reasoning',
+      operation: 'responses_create',
+      status: 'started',
+      requestType: 'json',
+      model,
+      promptLength: prompt.length,
+    });
 
     try {
-      const model = this.configService.get('OPENAI_MODEL') ?? 'gpt-4.1-mini';
       const response = await client.responses.create({
         model,
         input: prompt,
@@ -42,23 +61,55 @@ export class OpenAiService {
         throw createAppException('LLM_BAD_RESPONSE');
       }
 
+      this.logger.debug('openai.request.completed', {
+        stage: 'reasoning',
+        operation: 'responses_create',
+        status: 'completed',
+        requestType: 'json',
+        model,
+        durationMs: Date.now() - startedAt,
+        totalTokens: rawResponse.usage?.total_tokens ?? 0,
+      });
+
       return {
         content,
         totalTokens: rawResponse.usage?.total_tokens ?? 0,
       };
     } catch (error) {
-      throw normalizeError(error, {
+      const appError = normalizeError(error, {
         stage: 'reasoning',
         fallbackCode: 'LLM_UNAVAILABLE',
       });
+
+      this.logger.error('openai.request.failed', {
+        stage: 'reasoning',
+        operation: 'responses_create',
+        status: 'failed',
+        requestType: 'json',
+        model,
+        durationMs: Date.now() - startedAt,
+        errorCode: appError.code,
+      });
+
+      throw appError;
     }
   }
 
   async *streamTextResponse(prompt: string): AsyncGenerator<string, JsonCompletionResult> {
     const client = this.getClientOrThrow();
+    const model = this.configService.get('OPENAI_MODEL') ?? 'gpt-4.1-mini';
+    const startedAt = Date.now();
+
+    this.logger.debug('openai.request.started', {
+      stage: 'rendering',
+      operation: 'responses_create',
+      status: 'started',
+      requestType: 'stream',
+      model,
+      promptLength: prompt.length,
+    });
 
     try {
-      const model = this.configService.get('OPENAI_MODEL') ?? 'gpt-4.1-mini';
       const stream = await client.responses.create({
         model,
         input: prompt,
@@ -94,15 +145,37 @@ export class OpenAiService {
         throw createAppException('LLM_BAD_RESPONSE');
       }
 
+      this.logger.debug('openai.request.completed', {
+        stage: 'rendering',
+        operation: 'responses_create',
+        status: 'completed',
+        requestType: 'stream',
+        model,
+        durationMs: Date.now() - startedAt,
+        totalTokens,
+      });
+
       return {
         content: finalContent,
         totalTokens,
       };
     } catch (error) {
-      throw normalizeError(error, {
+      const appError = normalizeError(error, {
         stage: 'rendering',
         fallbackCode: 'LLM_UNAVAILABLE',
       });
+
+      this.logger.error('openai.request.failed', {
+        stage: 'rendering',
+        operation: 'responses_create',
+        status: 'failed',
+        requestType: 'stream',
+        model,
+        durationMs: Date.now() - startedAt,
+        errorCode: appError.code,
+      });
+
+      throw appError;
     }
   }
 

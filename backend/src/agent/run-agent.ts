@@ -16,6 +16,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const observations: AgentToolObservation[] = [];
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    input.logger?.debug('agent.loop.iteration.started', {
+      stage: 'reasoning',
+      operation: 'loop_iteration',
+      status: 'started',
+      iteration: iteration + 1,
+      maxIterations,
+      ...input.runContext,
+    });
     // Each iteration rebuilds the full prompt from history plus accumulated observations
     // so the model can reason over prior tool results without hidden mutable state.
     const prompt = buildPrompt({
@@ -30,9 +38,26 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     const parsedStep = parseAgentStep(rawStep);
     // The loop tolerates one malformed model response and asks for a repair pass before
     // falling back to a bounded safe answer.
+    if (!parsedStep) {
+      input.logger?.warn('agent.loop.repair_requested', {
+        stage: 'reasoning',
+        operation: 'repair_pass',
+        status: 'retrying',
+        iteration: iteration + 1,
+        ...input.runContext,
+      });
+    }
     const step = parsedStep ?? parseAgentStep(await input.llm(buildRepairPrompt(rawStep)));
 
     if (!step) {
+      input.logger?.warn('agent.loop.fallback.invalid_json', {
+        stage: 'reasoning',
+        operation: 'loop_exit',
+        status: 'fallback',
+        iteration: iteration + 1,
+        reason: 'invalid_json_after_repair',
+        ...input.runContext,
+      });
       return {
         finalAction: 'final_answer',
         finalAnswerBrief: FALLBACK_FINAL_ANSWER,
@@ -42,6 +67,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
 
     if (step.action === 'final_answer') {
+      input.logger?.debug('agent.loop.final_answer', {
+        stage: 'reasoning',
+        operation: 'loop_exit',
+        status: 'completed',
+        iteration: iteration + 1,
+        finalAction: step.action,
+        ...input.runContext,
+      });
       return {
         finalAction: step.action,
         finalAnswerBrief: step.answer.trim() || FALLBACK_FINAL_ANSWER,
@@ -50,12 +83,29 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       };
     }
 
+    input.logger?.debug('agent.loop.action.selected', {
+      stage: 'reasoning',
+      operation: 'tool_selection',
+      status: 'selected',
+      iteration: iteration + 1,
+      toolName: step.action,
+      ...input.runContext,
+    });
     const tool = input.tools.find((candidate) => candidate.name === step.action);
 
     if (!tool) {
       const appError = buildToolError(new Error(`Tool not found: ${step.action}`), {
         toolName: step.action,
         kind: 'tool_not_found',
+      });
+      input.logger?.warn('agent.loop.tool.missing', {
+        stage: 'tool',
+        operation: 'tool_lookup',
+        status: 'missing',
+        iteration: iteration + 1,
+        toolName: step.action,
+        errorCode: appError.code,
+        ...input.runContext,
       });
       // Unknown tools are treated as observations instead of hard failures so the model
       // gets another chance to recover in the next iteration.
@@ -104,6 +154,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         ),
       );
       const toolOutput = await tool.execute(step.input);
+      input.logger?.debug('agent.loop.tool.completed', {
+        stage: 'tool',
+        operation: 'tool_execution',
+        status: 'completed',
+        iteration: iteration + 1,
+        toolName: tool.name,
+        ...input.runContext,
+      });
       await Promise.resolve(
         input.stream(
           JSON.stringify({
@@ -123,6 +181,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       const appError = buildToolError(error, {
         toolName: tool.name,
         kind: 'tool_execution_failed',
+      });
+      input.logger?.warn('agent.loop.tool.failed', {
+        stage: 'tool',
+        operation: 'tool_execution',
+        status: 'failed',
+        iteration: iteration + 1,
+        toolName: tool.name,
+        errorCode: appError.code,
+        ...input.runContext,
       });
       // Tool failures are folded back into the observation list so the model can either
       // choose another action or stop with a final answer.
@@ -149,6 +216,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
   }
 
+  input.logger?.warn('agent.loop.iteration_cap_reached', {
+    stage: 'reasoning',
+    operation: 'loop_exit',
+    status: 'fallback',
+    maxIterations,
+    reason: 'iteration_cap_reached',
+    ...input.runContext,
+  });
   return {
     finalAction: 'final_answer',
     finalAnswerBrief:

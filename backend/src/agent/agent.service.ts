@@ -1,12 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import {
   buildRenderingWarning,
   isAppError,
+  normalizeError,
   toEventErrorPayload,
 } from '../common/errors/app-error';
 import { OpenAiService } from '../clients/openai/openai.service';
 import { MessagesRepository } from '../dal/repositories/messages.repository';
 import { AppEventEmitter } from '../events/emitter/event.emitter';
+import { LoggerService } from '../logger/logger.service';
 import { ToolService } from '../tool/tool.service';
 import { runAgent } from './run-agent';
 import type {
@@ -19,21 +21,40 @@ import type {
 
 @Injectable()
 export class AgentService {
+  private readonly logger: LoggerService;
+
   constructor(
     private readonly toolService: ToolService,
     private readonly openAiService: OpenAiService,
     private readonly messagesRepository: MessagesRepository,
     private readonly appEventEmitter: AppEventEmitter,
-  ) {}
+    @Optional() logger: LoggerService = new LoggerService(),
+  ) {
+    this.logger = logger.child({
+      component: AgentService.name,
+    });
+  }
 
   assertReady(): void {
     this.openAiService.assertConfigured();
   }
 
   async *streamResponse(context: AgentRunContext): AsyncGenerator<AgentEvent> {
+    const startedAt = Date.now();
     const history = await this.loadConversationHistory(context);
     const tools = this.buildTools(context);
     let llmTotalTokens = 0;
+
+    this.logger.info('agent.stream.started', {
+      stage: 'reasoning',
+      operation: 'stream_response',
+      status: 'started',
+      userId: context.userId,
+      conversationId: context.conversationId,
+      runId: context.runId,
+      historyCount: history.length,
+      toolCount: tools.length,
+    });
     // `runAgent()` is a promise-based loop, but the chat layer expects streaming events
     // while that loop is still running. This in-memory queue bridges those two models:
     // the loop pushes tool lifecycle events into the queue, and this generator yields them
@@ -43,6 +64,18 @@ export class AgentService {
     let result: RunAgentResult | null = null;
     let runError: unknown = null;
     const pushEvent = (event: AgentEvent) => {
+      this.logger.debug('agent.stream.event.queued', {
+        stage: event.type.startsWith('tool') ? 'tool' : 'reasoning',
+        operation: 'stream_event',
+        status: 'queued',
+        userId: context.userId,
+        conversationId: context.conversationId,
+        runId: context.runId,
+        eventType: event.type,
+        ...(event.type === 'tool.call.started' || event.type === 'tool.call.completed'
+          ? { toolName: event.toolName }
+          : {}),
+      });
       queue.push(event);
 
       if (notify) {
@@ -52,6 +85,17 @@ export class AgentService {
     };
     const runPromise = runAgent({
       llm: async (prompt) => {
+        const llmStartedAt = Date.now();
+
+        this.logger.debug('agent.llm.started', {
+          stage: 'reasoning',
+          operation: 'llm_call',
+          status: 'started',
+          userId: context.userId,
+          conversationId: context.conversationId,
+          runId: context.runId,
+          promptLength: prompt.length,
+        });
         void this.appEventEmitter.emitEvent({
           userId: context.userId,
           conversationId: context.conversationId,
@@ -62,13 +106,51 @@ export class AgentService {
             input: prompt,
           },
         });
-        const response = await this.openAiService.createJsonResponse(prompt);
-        llmTotalTokens += response.totalTokens;
-        return response.content;
+        try {
+          const response = await this.openAiService.createJsonResponse(prompt);
+          llmTotalTokens += response.totalTokens;
+
+          this.logger.debug('agent.llm.completed', {
+            stage: 'reasoning',
+            operation: 'llm_call',
+            status: 'completed',
+            userId: context.userId,
+            conversationId: context.conversationId,
+            runId: context.runId,
+            durationMs: Date.now() - llmStartedAt,
+            totalTokens: response.totalTokens,
+          });
+
+          return response.content;
+        } catch (error) {
+          const appError = normalizeError(error, {
+            stage: 'reasoning',
+            fallbackCode: 'LLM_UNAVAILABLE',
+          });
+
+          this.logger.error('agent.llm.failed', {
+            stage: appError.stage,
+            operation: 'llm_call',
+            status: 'failed',
+            userId: context.userId,
+            conversationId: context.conversationId,
+            runId: context.runId,
+            durationMs: Date.now() - llmStartedAt,
+            errorCode: appError.code,
+          });
+
+          throw error;
+        }
       },
       tools,
       history,
       userMessage: context.message,
+      logger: this.logger,
+      runContext: {
+        userId: context.userId,
+        conversationId: context.conversationId,
+        runId: context.runId,
+      },
       stream: async (chunk) => {
         const event = this.parseAgentStreamChunk(chunk);
 
@@ -80,9 +162,32 @@ export class AgentService {
     })
       .then((value) => {
         result = value;
+        this.logger.info('agent.loop.completed', {
+          stage: 'reasoning',
+          operation: 'agent_loop',
+          status: 'completed',
+          userId: context.userId,
+          conversationId: context.conversationId,
+          runId: context.runId,
+          iterationsUsed: value.iterationsUsed,
+          toolObservationCount: value.toolObservations.length,
+        });
       })
       .catch((error) => {
         runError = error;
+        const appError = normalizeError(error, {
+          stage: 'system',
+          fallbackCode: 'CHAT_INTERNAL_ERROR',
+        });
+        this.logger.error('agent.loop.failed', {
+          stage: appError.stage,
+          operation: 'agent_loop',
+          status: 'failed',
+          userId: context.userId,
+          conversationId: context.conversationId,
+          runId: context.runId,
+          errorCode: appError.code,
+        });
       })
       .finally(() => {
         if (notify) {
@@ -132,6 +237,15 @@ export class AgentService {
     let streamedTokens = 0;
 
     try {
+      const renderStartedAt = Date.now();
+      this.logger.info('agent.render.started', {
+        stage: 'rendering',
+        operation: 'final_render',
+        status: 'started',
+        userId: context.userId,
+        conversationId: context.conversationId,
+        runId: context.runId,
+      });
       void this.appEventEmitter.emitEvent({
         userId: context.userId,
         conversationId: context.conversationId,
@@ -150,6 +264,17 @@ export class AgentService {
         if (next.done) {
           finalMessage = next.value.content || finalMessage.trim();
           streamedTokens = next.value.totalTokens;
+          this.logger.info('agent.render.completed', {
+            stage: 'rendering',
+            operation: 'final_render',
+            status: 'completed',
+            userId: context.userId,
+            conversationId: context.conversationId,
+            runId: context.runId,
+            durationMs: Date.now() - renderStartedAt,
+            totalTokens: streamedTokens,
+            finalMessageLength: finalMessage.length,
+          });
           break;
         }
 
@@ -162,6 +287,16 @@ export class AgentService {
       }
     } catch (error) {
       const warning = buildRenderingWarning(error);
+
+      this.logger.warn('agent.render.fallback', {
+        stage: warning.stage,
+        operation: 'final_render',
+        status: 'fallback',
+        userId: context.userId,
+        conversationId: context.conversationId,
+        runId: context.runId,
+        errorCode: warning.code,
+      });
 
       yield {
         type: 'run.warning',
@@ -189,6 +324,19 @@ export class AgentService {
       type: 'usage.final',
       totalTokens: Math.max(32, llmTotalTokens + streamedTokens),
     };
+
+    this.logger.info('agent.stream.completed', {
+      stage: 'system',
+      operation: 'stream_response',
+      status: 'completed',
+      userId: context.userId,
+      conversationId: context.conversationId,
+      runId: context.runId,
+      durationMs: Date.now() - startedAt,
+      llmTotalTokens,
+      streamedTokens,
+      totalTokens: Math.max(32, llmTotalTokens + streamedTokens),
+    });
   }
 
   private buildTools(context: AgentRunContext): AgentTool[] {
@@ -208,7 +356,7 @@ export class AgentService {
     const messages = await this.messagesRepository.findByConversationId(context.conversationId);
     const historyLimit = this.resolveHistoryLimit();
 
-    return messages
+    const history = messages
       // The current user message is already persisted before the agent runs, so exclude
       // messages created for the active run to avoid duplicating it in the prompt.
       .filter((message) => String(message.runId) !== context.runId)
@@ -219,6 +367,20 @@ export class AgentService {
         role: message.role,
         text: message.content.text,
       }));
+
+    this.logger.debug('agent.history.loaded', {
+      stage: 'preflight',
+      operation: 'load_history',
+      status: 'completed',
+      userId: context.userId,
+      conversationId: context.conversationId,
+      runId: context.runId,
+      messageCount: messages.length,
+      historyCount: history.length,
+      historyLimit,
+    });
+
+    return history;
   }
 
   private buildFinalAnswerPrompt(input: {
@@ -363,6 +525,15 @@ export class AgentService {
     event: Extract<AgentEvent, { type: 'tool.call.started' | 'tool.call.completed' }>,
   ): Promise<void> {
     if (event.type === 'tool.call.started') {
+      this.logger.debug('agent.tool.event.started', {
+        stage: 'tool',
+        operation: 'persist_agent_event',
+        status: 'started',
+        userId: context.userId,
+        conversationId: context.conversationId,
+        runId: context.runId,
+        toolName: event.toolName,
+      });
       void this.appEventEmitter.emitEvent({
         userId: context.userId,
         conversationId: context.conversationId,
@@ -395,6 +566,17 @@ export class AgentService {
               }
             : {}),
       },
+    });
+
+    this.logger.debug('agent.tool.event.completed', {
+      stage: 'tool',
+      operation: 'persist_agent_event',
+      status: 'completed',
+      userId: context.userId,
+      conversationId: context.conversationId,
+      runId: context.runId,
+      toolName: event.toolName,
+      hasStructuredError: isAppError(event.output.appError),
     });
   }
 }

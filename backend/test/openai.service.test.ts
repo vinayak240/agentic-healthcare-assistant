@@ -92,6 +92,35 @@ describe('OpenAiService', () => {
       statusCode: 502,
     });
   });
+
+  it('logs OpenAI requests without leaking the raw prompt text', async () => {
+    const service = createServiceWithClient({
+      async create() {
+        return {
+          output_text: '{"ok":true}',
+          usage: {
+            total_tokens: 12,
+          },
+        };
+      },
+    });
+    const originalDebug = console.debug;
+    const entries: string[] = [];
+
+    console.debug = (...args: unknown[]) => {
+      entries.push(args.map((value) => String(value)).join(' '));
+    };
+
+    try {
+      await service.createJsonResponse('very sensitive symptom prompt');
+    } finally {
+      console.debug = originalDebug;
+    }
+
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.some((entry) => entry.includes('very sensitive symptom prompt'))).toBe(false);
+    expect(entries.some((entry) => entry.includes('"promptLength":'))).toBe(true);
+  });
 });
 
 function createServiceWithClient(create: { create: (input: unknown) => Promise<unknown> }) {
