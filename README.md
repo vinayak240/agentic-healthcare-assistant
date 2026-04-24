@@ -64,15 +64,7 @@ The backend Dockerfile already copies `backend/.env.example` into the backend im
 
 Recommended options:
 
-**Option 1: set the key in `docker-compose.yml`**
-
-In the `backend` service, replace the blank/default key line with your value:
-
-```yaml
-OPENAI_KEY: your_openai_api_key_here
-```
-
-**Option 2: edit `backend/.env.example` before building**
+**Option 1: edit `backend/.env.example` before building**
 
 Set:
 
@@ -81,6 +73,16 @@ OPENAI_KEY=your_openai_api_key_here
 ```
 
 Then build the Docker images. The backend image copies that file into the container as `.env`.
+
+**Option 2: set the key in `docker-compose.yml`**
+
+In the `backend` service, replace the blank/default key line with your value:
+
+```yaml
+OPENAI_KEY: your_openai_api_key_here
+```
+
+Compose environment values can override the container `.env`, so use this option when you want the key controlled directly by Docker Compose.
 
 ### 2. Start the full stack
 
