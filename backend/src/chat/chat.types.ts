@@ -33,6 +33,11 @@ export interface ChatResponse {
     id: string;
     role: 'assistant';
     text: string;
+    metadata?: {
+      modelName?: string;
+      totalTokens?: number;
+      costUsd?: number;
+    };
     createdAt: string | null;
   };
   warnings: AppError[];

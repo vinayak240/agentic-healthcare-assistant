@@ -1,16 +1,34 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { Types } from 'mongoose';
+import { OpenAiService } from '../../clients/openai/openai.service';
+import { MinioStorageService } from '../../clients/storage/minio-storage.service';
 import { ConversationsRepository } from '../../dal/repositories/conversations.repository';
+import { EventsRepository } from '../../dal/repositories/events.repository';
 import type { MessageCursorInput } from '../../dal/repositories/messages.repository';
 import { MessagesRepository } from '../../dal/repositories/messages.repository';
+import { UsagesRepository } from '../../dal/repositories/usages.repository';
+import type { MessageAudioMetadata } from '../../dal/interfaces/dal.types';
 import type { Conversation } from '../../dal/schemas/conversation.schema';
+import type { Event } from '../../dal/schemas/event.schema';
 import type { Message } from '../../dal/schemas/message.schema';
+import { LoggerService } from '../../logger/logger.service';
 import type { HydratedDocument } from 'mongoose';
+
+const AUDIO_CONTENT_TYPE = 'audio/mpeg';
+const DEFAULT_TTS_MODEL = 'gpt-4o-mini-tts';
+const DEFAULT_TTS_VOICE = 'coral';
+const TTS_CHUNK_MAX_WORDS = 15;
 
 @Injectable()
 export class ConversationService {
   constructor(
     private readonly conversationsRepository: ConversationsRepository,
     private readonly messagesRepository: MessagesRepository,
+    private readonly eventsRepository: EventsRepository,
+    private readonly usagesRepository: UsagesRepository,
+    private readonly openAiService: OpenAiService,
+    private readonly storageService: MinioStorageService,
+    @Optional() private readonly logger: LoggerService = new LoggerService(),
   ) {}
 
   async listConversations(params: { userId: string; limit?: number; cursor?: string }) {
@@ -61,8 +79,226 @@ export class ConversationService {
 
     return {
       conversationId: params.conversationId,
-      items: page.map((message) => this.serializeMessage(message)),
+      items: await Promise.all(page.map((message) => this.serializeMessage(message))),
       nextCursor,
+    };
+  }
+
+  async listToolEvents(params: { conversationId: string; runId?: string }) {
+    const conversation = await this.conversationsRepository.findById(params.conversationId);
+
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    const events = await this.eventsRepository.findMany({
+      conversationId: params.conversationId,
+      ...(params.runId ? { runId: params.runId } : {}),
+      type: {
+        $in: ['tool_called', 'tool_result', 'reasoning_delta', 'usage_final'],
+      },
+    });
+
+    const items = [...events]
+      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+      .map((event) => this.serializeToolEvent(event));
+
+    return {
+      conversationId: params.conversationId,
+      items,
+    };
+  }
+
+  async createAppointmentFollowUp(params: {
+    conversationId: string;
+    runId: string;
+    specialty?: string;
+    reason?: string;
+    doctorName?: string;
+    phone?: string;
+  }) {
+    const conversation = await this.conversationsRepository.findById(params.conversationId);
+
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    const text = this.buildAppointmentFollowUpText(params);
+    const createdAt = new Date();
+    const message = await this.messagesRepository.create({
+      userId: this.toObjectId(String(conversation.userId)),
+      conversationId: this.toObjectId(params.conversationId),
+      runId: this.toObjectId(params.runId),
+      role: 'assistant',
+      content: {
+        text,
+        metadata: {
+          kind: 'appointment_follow_up_confirmation',
+          handoffRunId: params.runId,
+          toolName: 'book_appointment',
+          specialty: params.specialty,
+          reason: params.reason,
+          doctorName: params.doctorName,
+          phone: params.phone,
+        },
+      },
+      cudFoil: {
+        createdAt,
+        updatedAt: createdAt,
+        deleted: false,
+        deletedAt: null,
+      },
+    });
+
+    await this.conversationsRepository.updateById(params.conversationId, {
+      $set: {
+        lastMessageAt: createdAt,
+      },
+    });
+
+    return this.serializeMessage(message);
+  }
+
+  async createMessageAudio(params: { conversationId: string; messageId: string }) {
+    const conversation = await this.conversationsRepository.findById(params.conversationId);
+
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    const message = await this.messagesRepository.findById(params.messageId);
+
+    if (!message || String(message.conversationId) !== params.conversationId) {
+      throw new NotFoundException('Message not found');
+    }
+
+    if (message.role !== 'assistant') {
+      throw new BadRequestException('Audio can only be generated for assistant messages');
+    }
+
+    const existingAudio = message.content.metadata?.audio;
+
+    if (existingAudio?.status === 'ready') {
+      return this.serializeMessageAudio(existingAudio);
+    }
+
+    const chunks = this.splitTextForSpeech(message.content.text);
+
+    if (chunks.length === 0) {
+      throw new BadRequestException('Message has no text to convert to audio');
+    }
+
+    // Increased the chunks and seq call leads to huge latency.
+    // 1. Use open api stream
+    // 2. Parallel calls (*) // O(t * n) -> O(Max(t));
+    //  - To improve this or make it resiliant add batch (throttled approach) , will lead to an bottleneck
+    try {
+      const uploadedChunks: MessageAudioMetadata['chunks'] = [];
+
+      await Promise.all(Array.from(chunks.entries()).map(async ([index, text]) => {
+          {
+          const audio = await this.openAiService.createSpeech({
+            text,
+            model: DEFAULT_TTS_MODEL,
+            voice: DEFAULT_TTS_VOICE,
+          });
+          const objectKey = [
+            'conversations',
+            params.conversationId,
+            'messages',
+            params.messageId,
+            `chunk-${String(index).padStart(3, '0')}.mp3`,
+          ].join('/');
+
+          await this.storageService.uploadObject({
+            key: objectKey,
+            body: audio,
+            contentType: AUDIO_CONTENT_TYPE,
+          });
+
+          uploadedChunks.push({
+            index,
+            objectKey,
+            contentType: AUDIO_CONTENT_TYPE,
+          });
+        }
+      }));
+
+      const audioMetadata: MessageAudioMetadata = {
+        status: 'ready',
+        provider: 'openai',
+        model: DEFAULT_TTS_MODEL,
+        voice: DEFAULT_TTS_VOICE,
+        generatedAt: new Date().toISOString(),
+        chunks: uploadedChunks,
+      };
+
+      await this.messagesRepository.updateById(params.messageId, {
+        $set: {
+          'content.metadata.audio': audioMetadata,
+        },
+      });
+
+      this.logger.info('conversation.message_audio.created', {
+        stage: 'audio',
+        operation: 'create_message_audio',
+        status: 'completed',
+        conversationId: params.conversationId,
+        messageId: params.messageId,
+        chunkCount: uploadedChunks.length,
+      });
+
+      return this.serializeMessageAudio(audioMetadata);
+    } catch (error) {
+      this.logger.error('conversation.message_audio.failed', {
+        stage: 'audio',
+        operation: 'create_message_audio',
+        status: 'failed',
+        conversationId: params.conversationId,
+        messageId: params.messageId,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        errorMessage: error instanceof Error ? error.message : 'Unknown audio generation error',
+      });
+
+      throw error;
+    }
+  }
+
+  async deleteMessage(params: { conversationId: string; messageId: string }) {
+    const conversation = await this.conversationsRepository.findById(params.conversationId);
+
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    const message = await this.messagesRepository.findById(params.messageId);
+
+    if (!message || String(message.conversationId) !== params.conversationId) {
+      throw new NotFoundException('Message not found');
+    }
+
+    const deleted = await this.messagesRepository.softDeleteById(params.messageId);
+
+    if (!deleted) {
+      throw new NotFoundException('Message not found');
+    }
+
+    const remainingMessages = await this.messagesRepository.findPageByConversationId({
+      conversationId: params.conversationId,
+      limit: 1,
+    });
+    const lastRemainingMessage = remainingMessages[0];
+
+    await this.conversationsRepository.updateById(params.conversationId, {
+      $set: {
+        lastMessageAt: lastRemainingMessage?.cudFoil.createdAt ?? new Date(),
+      },
+    });
+
+    return {
+      id: params.messageId,
+      conversationId: params.conversationId,
+      deleted: true,
     };
   }
 
@@ -77,7 +313,26 @@ export class ConversationService {
     };
   }
 
-  private serializeMessage(message: HydratedDocument<Message>) {
+  private async serializeMessage(message: HydratedDocument<Message>) {
+    const usage = message.role === 'assistant'
+      ? await this.usagesRepository.findByRunId(String(message.runId))
+      : null;
+
+    const metadata = {
+      ...(message.content.metadata ?? {}),
+      ...(message.role === 'assistant'
+        ? {
+            modelName:
+              message.content.metadata?.modelName ?? process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
+          }
+        : {}),
+      ...(usage ? { totalTokens: usage.totalTokens } : {}),
+    };
+
+    if (metadata.audio?.status === 'ready') {
+      metadata.audio = await this.serializeMessageAudioForHistory(metadata.audio);
+    }
+
     return {
       id: message._id.toString(),
       userId: String(message.userId),
@@ -85,8 +340,109 @@ export class ConversationService {
       runId: String(message.runId),
       role: message.role,
       text: message.content.text,
+      metadata,
       createdAt: message.cudFoil.createdAt?.toISOString() ?? null,
       updatedAt: message.cudFoil.updatedAt?.toISOString() ?? null,
+    };
+  }
+
+  private async serializeMessageAudio(audio: MessageAudioMetadata) {
+    return {
+      status: audio.status,
+      provider: audio.provider,
+      model: audio.model,
+      voice: audio.voice,
+      generatedAt: audio.generatedAt,
+      chunks: await Promise.all(
+        audio.chunks
+          .slice()
+          .sort((left, right) => left.index - right.index)
+          .map(async (chunk) => ({
+            index: chunk.index,
+            objectKey: chunk.objectKey,
+            contentType: chunk.contentType,
+            url: await this.storageService.createPresignedReadUrl(chunk.objectKey),
+          })),
+      ),
+    };
+  }
+
+  private async serializeMessageAudioForHistory(audio: MessageAudioMetadata) {
+    try {
+      return await this.serializeMessageAudio(audio);
+    } catch (error) {
+      this.logger.warn('conversation.message_audio.presign_failed', {
+        stage: 'audio',
+        operation: 'serialize_message_audio',
+        status: 'warning',
+        error: error instanceof Error ? error.message : 'Unknown audio signing error',
+      });
+
+      return audio;
+    }
+  }
+
+  private splitTextForSpeech(text: string): string[] {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+
+    if (!normalized) {
+      return [];
+    }
+
+    const sentences = normalized.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [normalized];
+    const chunks: string[] = [];
+    let current = '';
+
+    for (const sentence of sentences.map((value) => value.trim()).filter(Boolean)) {
+      if (!current) {
+        current = sentence;
+        continue;
+      }
+
+      if (this.countWords(`${current} ${sentence}`) <= TTS_CHUNK_MAX_WORDS) {
+        current = `${current} ${sentence}`;
+        continue;
+      }
+
+      chunks.push(current);
+      current = sentence;
+    }
+
+    if (current) {
+      chunks.push(current);
+    }
+
+    return chunks.flatMap((chunk) => this.splitOversizedSpeechChunk(chunk));
+  }
+
+  private splitOversizedSpeechChunk(chunk: string): string[] {
+    const words = chunk.split(' ').filter(Boolean);
+
+    if (words.length <= TTS_CHUNK_MAX_WORDS) {
+      return [chunk];
+    }
+
+    const parts: string[] = [];
+
+    for (let start = 0; start < words.length; start += TTS_CHUNK_MAX_WORDS) {
+      parts.push(words.slice(start, start + TTS_CHUNK_MAX_WORDS).join(' '));
+    }
+
+    return parts.filter(Boolean);
+  }
+
+  private countWords(value: string): number {
+    return value.split(' ').filter(Boolean).length;
+  }
+
+  private serializeToolEvent(event: HydratedDocument<Event>) {
+    return {
+      id: event._id.toString(),
+      conversationId: String(event.conversationId),
+      runId: String(event.runId),
+      type: event.type,
+      createdAt: event.createdAt.toISOString(),
+      payload: event.payload,
     };
   }
 
@@ -140,5 +496,31 @@ export class ConversationService {
     } catch {
       throw new BadRequestException('Invalid message cursor');
     }
+  }
+
+  private buildAppointmentFollowUpText(params: {
+    specialty?: string;
+    reason?: string;
+    doctorName?: string;
+  }): string {
+    const details = [params.specialty, params.reason].filter(
+      (value): value is string => typeof value === 'string' && value.trim().length > 0,
+    );
+
+    if (params.doctorName?.trim()) {
+      return details.length > 0
+        ? `Appointment follow-up requested with ${params.doctorName.trim()} for ${details.join(' - ')}.`
+        : `Appointment follow-up requested with ${params.doctorName.trim()}.`;
+    }
+
+    if (details.length > 0) {
+      return `Appointment follow-up requested for ${details.join(' - ')}.`;
+    }
+
+    return 'Appointment follow-up requested.';
+  }
+
+  private toObjectId(value: string) {
+    return new Types.ObjectId(value);
   }
 }

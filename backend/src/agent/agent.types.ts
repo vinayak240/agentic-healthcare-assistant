@@ -56,6 +56,10 @@ export interface RunAgentResult {
 
 export type AgentEvent =
   | {
+      type: 'reasoning.delta';
+      delta: string;
+    }
+  | {
       type: 'message.delta';
       delta: string;
     }

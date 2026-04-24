@@ -16,7 +16,10 @@ import { SystemService } from '../../src/api/services/system.service';
 import { UserService } from '../../src/api/services/user.service';
 import { UsageService } from '../../src/api/services/usage.service';
 import { ChatService } from '../../src/chat/chat.service';
+import { OpenAiService } from '../../src/clients/openai/openai.service';
+import { MinioStorageService } from '../../src/clients/storage/minio-storage.service';
 import { ConversationsRepository } from '../../src/dal/repositories/conversations.repository';
+import { EventsRepository } from '../../src/dal/repositories/events.repository';
 import { MessagesRepository } from '../../src/dal/repositories/messages.repository';
 import { RunsRepository } from '../../src/dal/repositories/runs.repository';
 import { UsagesRepository } from '../../src/dal/repositories/usages.repository';
@@ -52,8 +55,25 @@ export interface MockRepositories {
   };
   messagesRepository: {
     create: MockFunction<[Record<string, unknown>], Promise<unknown>>;
+    findById: MockFunction<[string], Promise<unknown>>;
     findPageByConversationId: MockFunction<[Record<string, unknown>], Promise<unknown[]>>;
+    updateById: MockFunction<[string, Record<string, unknown>], Promise<unknown>>;
+    softDeleteById: MockFunction<[string], Promise<unknown>>;
     createCalls: Array<Record<string, unknown>>;
+    listCalls: Array<Record<string, unknown>>;
+    updateCalls: Array<{ id: string; update: Record<string, unknown> }>;
+    deleteCalls: string[];
+  };
+  openAiService: {
+    createSpeech: MockFunction<[Record<string, unknown>], Promise<Buffer>>;
+  };
+  minioStorageService: {
+    uploadObject: MockFunction<[Record<string, unknown>], Promise<void>>;
+    createPresignedReadUrl: MockFunction<[string], Promise<string>>;
+    uploadCalls: Array<Record<string, unknown>>;
+  };
+  eventsRepository: {
+    findMany: MockFunction<[Record<string, unknown>], Promise<unknown[]>>;
     listCalls: Array<Record<string, unknown>>;
   };
   runsRepository: {
@@ -236,6 +256,8 @@ export async function createApiTestContext() {
   const messagesRepository = {
     createCalls: [] as Array<Record<string, unknown>>,
     listCalls: [] as Array<Record<string, unknown>>,
+    updateCalls: [] as Array<{ id: string; update: Record<string, unknown> }>,
+    deleteCalls: [] as string[],
     async create(input: Record<string, unknown>) {
       messagesRepository.createCalls.push(input);
 
@@ -260,6 +282,43 @@ export async function createApiTestContext() {
       messagesRepository.listCalls.push(input);
 
       return [createMessageDoc(TEST_IDS.assistantMessageId, 'assistant', '2026-04-23T09:03:00.000Z')];
+    },
+    async findById(id: string) {
+      if (id !== TEST_IDS.assistantMessageId && id !== TEST_IDS.userMessageId) {
+        return null;
+      }
+
+      return createMessageDoc(
+        id,
+        id === TEST_IDS.assistantMessageId ? 'assistant' : 'user',
+        '2026-04-23T09:03:00.000Z',
+      );
+    },
+    async updateById(id: string, update: Record<string, unknown>) {
+      messagesRepository.updateCalls.push({ id, update });
+
+      if (id !== TEST_IDS.assistantMessageId && id !== TEST_IDS.userMessageId) {
+        return null;
+      }
+
+      return createMessageDoc(
+        id,
+        id === TEST_IDS.assistantMessageId ? 'assistant' : 'user',
+        '2026-04-23T09:03:00.000Z',
+      );
+    },
+    async softDeleteById(id: string) {
+      messagesRepository.deleteCalls.push(id);
+
+      if (id !== TEST_IDS.assistantMessageId && id !== TEST_IDS.userMessageId) {
+        return null;
+      }
+
+      return createMessageDoc(
+        id,
+        id === TEST_IDS.assistantMessageId ? 'assistant' : 'user',
+        '2026-04-23T09:03:00.000Z',
+      );
     },
   };
 
@@ -326,6 +385,28 @@ export async function createApiTestContext() {
           deletedAt: null,
         },
       });
+    },
+  };
+
+  const eventsRepository = {
+    listCalls: [] as Array<Record<string, unknown>>,
+    async findMany(input: Record<string, unknown>) {
+      eventsRepository.listCalls.push(input);
+
+      return [
+        createEventDoc('507f1f77bcf86cd799439021', 'tool_called', '2026-04-23T09:00:05.000Z', {
+          toolName: 'mock-tool',
+          toolData: {
+            query: 'Mock assistant reply',
+          },
+        }),
+        createEventDoc('507f1f77bcf86cd799439022', 'tool_result', '2026-04-23T09:00:06.000Z', {
+          toolName: 'mock-tool',
+          toolData: {
+            ok: true,
+          },
+        }),
+      ];
     },
   };
 
@@ -422,6 +503,22 @@ export async function createApiTestContext() {
     },
   };
 
+  const openAiService = {
+    async createSpeech(_input: Record<string, unknown>) {
+      return Buffer.from('mock audio');
+    },
+  };
+
+  const minioStorageService = {
+    uploadCalls: [] as Array<Record<string, unknown>>,
+    async uploadObject(input: Record<string, unknown>) {
+      minioStorageService.uploadCalls.push(input);
+    },
+    async createPresignedReadUrl(key: string) {
+      return `http://localhost:9000/chat-audio/${key}?signed=true`;
+    },
+  };
+
   const agentService = {
     calls: [] as Array<Record<string, unknown>>,
     assertReady() {
@@ -441,6 +538,10 @@ export async function createApiTestContext() {
         input: {
           query: context.message,
         },
+      };
+      yield {
+        type: 'reasoning.delta' as const,
+        delta: 'Selected mock-tool to gather supporting information.',
       };
       yield {
         type: 'tool.call.completed' as const,
@@ -485,10 +586,13 @@ export async function createApiTestContext() {
       SystemService,
       UserService,
       { provide: ConversationsRepository, useValue: conversationsRepository },
+      { provide: EventsRepository, useValue: eventsRepository },
       { provide: MessagesRepository, useValue: messagesRepository },
       { provide: RunsRepository, useValue: runsRepository },
       { provide: UsagesRepository, useValue: usagesRepository },
       { provide: UsersRepository, useValue: usersRepository },
+      { provide: OpenAiService, useValue: openAiService },
+      { provide: MinioStorageService, useValue: minioStorageService },
       { provide: AgentService, useValue: agentService },
       { provide: AppEventEmitter, useValue: appEventEmitter },
     ],
@@ -521,12 +625,15 @@ export async function createApiTestContext() {
     },
     mocks: {
       conversationsRepository,
+      eventsRepository,
       messagesRepository,
       runsRepository,
       usagesRepository,
       appEventEmitter,
       usersRepository,
       agentService,
+      openAiService,
+      minioStorageService,
     } satisfies MockRepositories,
   };
 }
@@ -589,5 +696,25 @@ export function createMessageDoc(id: string, role: 'assistant' | 'user', created
       deleted: false,
       deletedAt: null,
     },
+  };
+}
+
+export function createEventDoc(
+  id: string,
+  type: 'tool_called' | 'tool_result',
+  createdAt: string,
+  payload: Record<string, unknown>,
+) {
+  return {
+    _id: {
+      toString: () => id,
+    },
+    userId: TEST_IDS.userId,
+    conversationId: TEST_IDS.conversationId,
+    runId: TEST_IDS.runId,
+    source: 'agent',
+    type,
+    payload,
+    createdAt: new Date(createdAt),
   };
 }

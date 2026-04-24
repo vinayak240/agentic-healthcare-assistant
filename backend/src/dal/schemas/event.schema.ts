@@ -33,6 +33,7 @@ export class Event {
     enum: [
       'run_started',
       'llm_called',
+      'reasoning_delta',
       'tool_called',
       'tool_result',
       'message_created',
@@ -47,8 +48,10 @@ export class Event {
     type: {
       input: { type: String },
       output: { type: String },
+      text: { type: String },
       toolName: { type: String },
       toolData: { type: Object },
+      modelName: { type: String },
       error: { type: String },
       errorCode: { type: String },
       errorStage: { type: String },

@@ -14,6 +14,7 @@ export class AppEventConsumer extends BaseConsumer implements OnModuleInit {
   private readonly handlers: Record<EventType, (event: AppEvent) => Promise<void>> = {
     run_started: (event) => this.persistOnly(event),
     llm_called: (event) => this.persistOnly(event),
+    reasoning_delta: (event) => this.persistOnly(event),
     tool_called: (event) => this.persistOnly(event),
     tool_result: (event) => this.persistOnly(event),
     message_created: (event) => this.persistOnly(event),

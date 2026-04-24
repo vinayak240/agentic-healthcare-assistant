@@ -423,6 +423,17 @@ export class AgentService {
     // Only tool lifecycle events are emitted by `runAgent()`. Message streaming is handled
     // separately by the final-answer OpenAI stream, so anything else is ignored here.
     if (
+      candidate.type === 'reasoning.delta' &&
+      typeof candidate.delta === 'string' &&
+      candidate.delta.trim().length > 0
+    ) {
+      return {
+        type: 'reasoning.delta',
+        delta: candidate.delta,
+      };
+    }
+
+    if (
       candidate.type === 'tool.call.started' &&
       typeof candidate.toolName === 'string' &&
       candidate.input &&
@@ -520,10 +531,26 @@ export class AgentService {
     return Math.floor(rawValue);
   }
 
-  private async persistAgentEvent(
-    context: AgentRunContext,
-    event: Extract<AgentEvent, { type: 'tool.call.started' | 'tool.call.completed' }>,
-  ): Promise<void> {
+  private async persistAgentEvent(context: AgentRunContext, event: AgentEvent): Promise<void> {
+    if (event.type === 'reasoning.delta') {
+      void this.appEventEmitter.emitEvent({
+        userId: context.userId,
+        conversationId: context.conversationId,
+        runId: context.runId,
+        source: 'agent',
+        type: 'reasoning_delta',
+        payload: {
+          text: event.delta,
+        },
+      });
+
+      return;
+    }
+
+    if (event.type !== 'tool.call.started' && event.type !== 'tool.call.completed') {
+      return;
+    }
+
     if (event.type === 'tool.call.started') {
       this.logger.debug('agent.tool.event.started', {
         stage: 'tool',

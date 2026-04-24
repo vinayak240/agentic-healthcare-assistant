@@ -18,8 +18,41 @@ export type RunStatus = 'running' | 'completed' | 'failed';
 
 export type MessageRole = 'system' | 'user' | 'assistant';
 
+export interface AppointmentFollowUpConfirmationMetadata {
+  kind: 'appointment_follow_up_confirmation';
+  handoffRunId: string;
+  toolName: 'book_appointment';
+  specialty?: string;
+  reason?: string;
+  doctorName?: string;
+  phone?: string;
+}
+
+export interface MessageGenerationMetadata {
+  modelName?: string;
+  totalTokens?: number;
+  costUsd?: number;
+  audio?: MessageAudioMetadata;
+}
+
+export interface MessageAudioChunkMetadata {
+  index: number;
+  objectKey: string;
+  contentType: string;
+}
+
+export interface MessageAudioMetadata {
+  status: 'ready';
+  provider: 'openai';
+  model: string;
+  voice: string;
+  generatedAt: string;
+  chunks: MessageAudioChunkMetadata[];
+}
+
 export interface MessageContent {
   text: string;
+  metadata?: (AppointmentFollowUpConfirmationMetadata & MessageGenerationMetadata) | MessageGenerationMetadata;
 }
 
 export type EventSource = 'agent' | 'user' | 'system';
@@ -27,6 +60,7 @@ export type EventSource = 'agent' | 'user' | 'system';
 export type EventType =
   | 'run_started'
   | 'llm_called'
+  | 'reasoning_delta'
   | 'tool_called'
   | 'tool_result'
   | 'message_created'
@@ -37,8 +71,10 @@ export type EventType =
 export interface EventPayload {
   input?: string;
   output?: string;
+  text?: string;
   toolName?: string;
   toolData?: Record<string, unknown>;
+  modelName?: string;
   error?: string;
   errorCode?: AppErrorCode;
   errorStage?: AppErrorStage;

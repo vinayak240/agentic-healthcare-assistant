@@ -100,18 +100,20 @@ describe('AgentService', () => {
     }
 
     expect(events.map((event) => event.type)).toEqual([
+      'reasoning.delta',
       'tool.call.started',
       'tool.call.completed',
+      'reasoning.delta',
       'message.delta',
       'message.delta',
       'message.completed',
     ]);
-    expect(events[0]).toEqual({
+    expect(events[1]).toEqual({
       type: 'tool.call.started',
       toolName: 'lookup',
       input: { query: 'cough' },
     });
-    expect(events[1]).toEqual({
+    expect(events[2]).toEqual({
       type: 'tool.call.completed',
       toolName: 'lookup',
       output: {
@@ -119,7 +121,7 @@ describe('AgentService', () => {
         echoed: 'cough',
       },
     });
-    expect(events[4]).toEqual({
+    expect(events.at(-1)).toEqual({
       type: 'message.completed',
       message: 'Hello there',
     });
@@ -371,7 +373,8 @@ describe('AgentService', () => {
       events.push(event);
     }
 
-    expect(events[0]).toEqual({
+    expect(events.some((event) => event.type === 'reasoning.delta')).toBe(true);
+    expect(events.find((event) => event.type === 'run.warning')).toEqual({
       type: 'run.warning',
       error: expect.objectContaining({
         code: 'LLM_RENDERING_FAILED',
@@ -464,7 +467,7 @@ describe('AgentService', () => {
       events.push(event);
     }
 
-    expect(events[1]).toEqual({
+    expect(events.find((event) => event.type === 'tool.call.completed')).toEqual({
       type: 'tool.call.completed',
       toolName: 'lookup',
       output: {

@@ -4,7 +4,10 @@ import type { TestingModule } from '@nestjs/testing';
 import { ChatRequestDto } from '../src/api/dto/chat-request.dto';
 import { ConversationIdParamDto } from '../src/api/dto/conversation-id-param.dto';
 import { ConversationListQueryDto } from '../src/api/dto/conversation-list-query.dto';
+import { CreateAppointmentFollowUpDto } from '../src/api/dto/create-appointment-follow-up.dto';
 import { CreateUserDto } from '../src/api/dto/create-user.dto';
+import { LoginUserDto } from '../src/api/dto/login-user.dto';
+import { MessageIdParamDto } from '../src/api/dto/message-id-param.dto';
 import { PaginationDto } from '../src/api/dto/pagination.dto';
 import { RunIdParamDto } from '../src/api/dto/run-id-param.dto';
 import { UsageRangeQueryDto } from '../src/api/dto/usage-range-query.dto';
@@ -14,6 +17,7 @@ import {
   closeTestContext,
   createApiTestContext,
   createConversationDoc,
+  createEventDoc,
   createMessageDoc,
   TEST_IDS,
   validateDto,
@@ -417,6 +421,275 @@ describe('API layer', () => {
     });
   });
 
+  it('POST /conversations/:id/messages/:messageId/audio generates and stores assistant audio chunks', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const params = await validateDto(
+      ctx.validationPipe,
+      {
+        id: TEST_IDS.conversationId,
+        messageId: TEST_IDS.assistantMessageId,
+      },
+      { type: 'param', metatype: MessageIdParamDto, data: '' },
+    );
+
+    const response = await ctx.controllers.conversation.createMessageAudio(params);
+
+    expect(response.status).toBe('ready');
+    expect(response.provider).toBe('openai');
+    expect(response.model).toBe('gpt-4o-mini-tts');
+    expect(response.chunks).toHaveLength(1);
+    expect(response.chunks[0]).toMatchObject({
+      index: 0,
+      contentType: 'audio/mpeg',
+      url: expect.stringContaining('?signed=true'),
+    });
+    expect(ctx.mocks.minioStorageService.uploadCalls).toHaveLength(1);
+    expect(ctx.mocks.messagesRepository.updateCalls[0]).toMatchObject({
+      id: TEST_IDS.assistantMessageId,
+      update: {
+        $set: {
+          'content.metadata.audio': {
+            status: 'ready',
+            provider: 'openai',
+            model: 'gpt-4o-mini-tts',
+            voice: 'coral',
+            chunks: [
+              {
+                index: 0,
+                contentType: 'audio/mpeg',
+              },
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  it('POST /conversations/:id/messages/:messageId/audio caps generated chunks at 15 words', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    ctx.mocks.messagesRepository.findById = async (id) => ({
+      ...createMessageDoc(id, 'assistant', '2026-04-23T09:03:00.000Z'),
+      content: {
+        text: [
+          'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen.',
+          'seventeen eighteen nineteen.',
+        ].join(' '),
+      },
+    });
+
+    const speechInputs: string[] = [];
+    ctx.mocks.openAiService.createSpeech = async (input) => {
+      speechInputs.push(String(input.text));
+      return Buffer.from('mock audio');
+    };
+
+    const params = await validateDto(
+      ctx.validationPipe,
+      {
+        id: TEST_IDS.conversationId,
+        messageId: TEST_IDS.assistantMessageId,
+      },
+      { type: 'param', metatype: MessageIdParamDto, data: '' },
+    );
+
+    const response = await ctx.controllers.conversation.createMessageAudio(params);
+
+    expect(response.chunks).toHaveLength(3);
+    expect(speechInputs.map((chunk) => chunk.split(' ').filter(Boolean).length)).toEqual([15, 1, 3]);
+  });
+
+  it('POST /conversations/:id/messages/:messageId/audio returns existing audio with fresh signed URLs', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    ctx.mocks.messagesRepository.findById = async (id) => ({
+      ...createMessageDoc(id, 'assistant', '2026-04-23T09:03:00.000Z'),
+      content: {
+        text: 'Already spoken',
+        metadata: {
+          audio: {
+            status: 'ready',
+            provider: 'openai',
+            model: 'gpt-4o-mini-tts',
+            voice: 'coral',
+            generatedAt: '2026-04-23T09:04:00.000Z',
+            chunks: [
+              {
+                index: 0,
+                objectKey: 'conversations/existing/chunk-000.mp3',
+                contentType: 'audio/mpeg',
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const params = await validateDto(
+      ctx.validationPipe,
+      {
+        id: TEST_IDS.conversationId,
+        messageId: TEST_IDS.assistantMessageId,
+      },
+      { type: 'param', metatype: MessageIdParamDto, data: '' },
+    );
+
+    const response = await ctx.controllers.conversation.createMessageAudio(params);
+
+    expect(response.chunks[0].url).toContain('?signed=true');
+    expect(ctx.mocks.minioStorageService.uploadCalls).toHaveLength(0);
+    expect(ctx.mocks.messagesRepository.updateCalls).toHaveLength(0);
+  });
+
+  it('POST /conversations/:id/messages/:messageId/audio rejects non-assistant messages', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const params = await validateDto(
+      ctx.validationPipe,
+      {
+        id: TEST_IDS.conversationId,
+        messageId: TEST_IDS.userMessageId,
+      },
+      { type: 'param', metatype: MessageIdParamDto, data: '' },
+    );
+
+    await expect(ctx.controllers.conversation.createMessageAudio(params)).rejects.toThrow(
+      'Audio can only be generated for assistant messages',
+    );
+  });
+
+  it('GET /conversations/:id/tool-events returns persisted tool activity in chronological order', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    ctx.mocks.eventsRepository.findMany = async (input) => {
+      ctx.mocks.eventsRepository.listCalls.push(input);
+
+      return [
+        createEventDoc('507f1f77bcf86cd799439022', 'tool_result', '2026-04-23T09:00:06.000Z', {
+          toolName: 'mock-tool',
+          toolData: {
+            ok: true,
+          },
+        }),
+        createEventDoc('507f1f77bcf86cd799439021', 'tool_called', '2026-04-23T09:00:05.000Z', {
+          toolName: 'mock-tool',
+          toolData: {
+            query: 'Summarize my visit notes',
+          },
+        }),
+      ];
+    };
+
+    const params = await validateDto(
+      ctx.validationPipe,
+      { id: TEST_IDS.conversationId },
+      { type: 'param', metatype: ConversationIdParamDto, data: '' },
+    );
+
+    const response = await ctx.controllers.conversation.listToolEvents(params, {});
+
+    expect(response.items).toHaveLength(2);
+    expect(response.items[0].type).toBe('tool_called');
+    expect(response.items[1].type).toBe('tool_result');
+    expect(response.items[0].payload.toolName).toBe('mock-tool');
+    expect(ctx.mocks.eventsRepository.listCalls[0]).toEqual({
+      conversationId: TEST_IDS.conversationId,
+      type: {
+        $in: ['tool_called', 'tool_result', 'reasoning_delta', 'usage_final'],
+      },
+    });
+  });
+
+  it('DELETE /conversations/:id/messages/:messageId soft deletes a message and refreshes conversation time', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const params = await validateDto(
+      ctx.validationPipe,
+      {
+        id: TEST_IDS.conversationId,
+        messageId: TEST_IDS.assistantMessageId,
+      },
+      { type: 'param', metatype: MessageIdParamDto, data: '' },
+    );
+
+    const response = await ctx.controllers.conversation.deleteMessage(params);
+
+    expect(response).toEqual({
+      id: TEST_IDS.assistantMessageId,
+      conversationId: TEST_IDS.conversationId,
+      deleted: true,
+    });
+    expect(ctx.mocks.messagesRepository.deleteCalls).toEqual([TEST_IDS.assistantMessageId]);
+    expect(ctx.mocks.conversationsRepository.updateCalls.at(-1)).toEqual({
+      id: TEST_IDS.conversationId,
+      update: {
+        $set: {
+          lastMessageAt: expect.any(Date),
+        },
+      },
+    });
+  });
+
+  it('POST /conversations/:id/appointment-follow-up persists an assistant confirmation note', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const params = await validateDto(
+      ctx.validationPipe,
+      { id: TEST_IDS.conversationId },
+      { type: 'param', metatype: ConversationIdParamDto, data: '' },
+    );
+    const body = await validateDto(
+      ctx.validationPipe,
+      {
+        runId: TEST_IDS.runId,
+        specialty: 'General Medicine',
+        reason: 'Persistent cough',
+        doctorName: 'Dr. Anita Patel',
+        phone: '+1-555-0101',
+      },
+      { type: 'body', metatype: CreateAppointmentFollowUpDto, data: '' },
+    );
+
+    const response = await ctx.controllers.conversation.createAppointmentFollowUp(params, body);
+
+    expect(response.role).toBe('assistant');
+    expect(response.text).toContain('Appointment follow-up requested');
+    expect(response.metadata).toEqual(expect.objectContaining({
+      kind: 'appointment_follow_up_confirmation',
+      handoffRunId: TEST_IDS.runId,
+      toolName: 'book_appointment',
+      specialty: 'General Medicine',
+      reason: 'Persistent cough',
+      doctorName: 'Dr. Anita Patel',
+      phone: '+1-555-0101',
+    }));
+    expect(ctx.mocks.messagesRepository.createCalls.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: {
+        metadata: {
+          handoffRunId: TEST_IDS.runId,
+          toolName: 'book_appointment',
+        },
+      },
+    });
+    expect(ctx.mocks.conversationsRepository.updateCalls.at(-1)).toEqual({
+      id: TEST_IDS.conversationId,
+      update: {
+        $set: {
+          lastMessageAt: expect.any(Date),
+        },
+      },
+    });
+  });
+
   it('GET /runs/:id returns run metadata', async () => {
     const ctx = await createApiTestContext();
     moduleRef = ctx.moduleRef;
@@ -529,6 +802,42 @@ describe('API layer', () => {
     );
   });
 
+  it('POST /users/login returns an existing user for a normalized email', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const body = await validateDto(
+      ctx.validationPipe,
+      {
+        email: 'Test@Example.com',
+      },
+      { type: 'body', metatype: LoginUserDto, data: '' },
+    );
+
+    const response = await ctx.controllers.user.loginUser(body);
+
+    expect(response.id).toBe(TEST_IDS.userId);
+    expect(response.email).toBe('test@example.com');
+    expect(ctx.mocks.usersRepository.findByEmailCalls.at(-1)).toBe('test@example.com');
+  });
+
+  it('POST /users/login returns not found for an unknown email', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    const body = await validateDto(
+      ctx.validationPipe,
+      {
+        email: 'missing@example.com',
+      },
+      { type: 'body', metatype: LoginUserDto, data: '' },
+    );
+
+    await expect(ctx.controllers.user.loginUser(body)).rejects.toThrow(
+      'No account found for this email',
+    );
+  });
+
   it('GET /users returns the user list', async () => {
     const ctx = await createApiTestContext();
     moduleRef = ctx.moduleRef;
@@ -567,6 +876,21 @@ describe('API layer', () => {
           email: 'not-an-email',
         },
         { type: 'body', metatype: CreateUserDto, data: '' },
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('login user DTO validation rejects invalid emails', async () => {
+    const ctx = await createApiTestContext();
+    moduleRef = ctx.moduleRef;
+
+    await expect(
+      validateDto(
+        ctx.validationPipe,
+        {
+          email: 'not-an-email',
+        },
+        { type: 'body', metatype: LoginUserDto, data: '' },
       ),
     ).rejects.toThrow();
   });

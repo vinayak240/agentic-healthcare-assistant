@@ -67,6 +67,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
 
     if (step.action === 'final_answer') {
+      await Promise.resolve(
+        input.stream(
+          JSON.stringify({
+            type: 'reasoning.delta',
+            delta: 'Prepared a final response from the available conversation context.',
+          }),
+        ),
+      );
       input.logger?.debug('agent.loop.final_answer', {
         stage: 'reasoning',
         operation: 'loop_exit',
@@ -91,6 +99,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       toolName: step.action,
       ...input.runContext,
     });
+    await Promise.resolve(
+      input.stream(
+        JSON.stringify({
+          type: 'reasoning.delta',
+          delta: `Selected ${step.action} to gather supporting information.`,
+        }),
+      ),
+    );
     const tool = input.tools.find((candidate) => candidate.name === step.action);
 
     if (!tool) {

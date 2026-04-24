@@ -54,6 +54,17 @@ export class UserService {
     return this.serializeUser(user);
   }
 
+  async loginUser(email: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await this.usersRepository.findByEmail(normalizedEmail);
+
+    if (!user) {
+      throw new NotFoundException('No account found for this email');
+    }
+
+    return this.serializeUser(user);
+  }
+
   async ensureUserExists(id: string): Promise<HydratedDocument<User>> {
     const user = await this.usersRepository.findById(id);
 

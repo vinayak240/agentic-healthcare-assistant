@@ -72,13 +72,20 @@ describe('runAgent', () => {
         output: { echoed: 'fever' },
       },
     ]);
-    expect(streamed).toHaveLength(2);
-    expect(JSON.parse(streamed[0])).toEqual({
+    const streamedEvents = streamed.map((chunk) => JSON.parse(chunk) as { type: string });
+
+    expect(streamedEvents.map((event) => event.type)).toEqual([
+      'reasoning.delta',
+      'tool.call.started',
+      'tool.call.completed',
+      'reasoning.delta',
+    ]);
+    expect(streamedEvents[1]).toEqual({
       type: 'tool.call.started',
       toolName: 'lookup',
       input: { query: 'fever' },
     });
-    expect(JSON.parse(streamed[1])).toEqual({
+    expect(streamedEvents[2]).toEqual({
       type: 'tool.call.completed',
       toolName: 'lookup',
       output: { echoed: 'fever' },

@@ -12,6 +12,12 @@ interface JsonCompletionResult {
   totalTokens: number;
 }
 
+interface SpeechInput {
+  text: string;
+  model?: string;
+  voice?: string;
+}
+
 @Injectable()
 export class OpenAiService {
   private client: OpenAI | null = null;
@@ -171,6 +177,65 @@ export class OpenAiService {
         status: 'failed',
         requestType: 'stream',
         model,
+        durationMs: Date.now() - startedAt,
+        errorCode: appError.code,
+      });
+
+      throw appError;
+    }
+  }
+
+  async createSpeech(input: SpeechInput): Promise<Buffer> {
+    const client = this.getClientOrThrow();
+    const model = input.model ?? 'gpt-4o-mini-tts';
+    const voice = input.voice ?? 'coral';
+    const startedAt = Date.now();
+
+    this.logger.debug('openai.request.started', {
+      stage: 'audio',
+      operation: 'audio_speech_create',
+      status: 'started',
+      requestType: 'speech',
+      model,
+      voice,
+      inputLength: input.text.length,
+    });
+
+    try {
+      const response = await client.audio.speech.create({
+        model,
+        voice: voice as never,
+        input: input.text,
+        response_format: 'mp3',
+      });
+      const arrayBuffer = await response.arrayBuffer();
+      const audio = Buffer.from(arrayBuffer);
+
+      this.logger.debug('openai.request.completed', {
+        stage: 'audio',
+        operation: 'audio_speech_create',
+        status: 'completed',
+        requestType: 'speech',
+        model,
+        voice,
+        durationMs: Date.now() - startedAt,
+        byteLength: audio.byteLength,
+      });
+
+      return audio;
+    } catch (error) {
+      const appError = normalizeError(error, {
+        stage: 'rendering',
+        fallbackCode: 'LLM_UNAVAILABLE',
+      });
+
+      this.logger.error('openai.request.failed', {
+        stage: 'audio',
+        operation: 'audio_speech_create',
+        status: 'failed',
+        requestType: 'speech',
+        model,
+        voice,
         durationMs: Date.now() - startedAt,
         errorCode: appError.code,
       });

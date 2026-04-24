@@ -33,6 +33,41 @@ export class Message {
   @Prop({
     type: {
       text: { type: String, required: true },
+      metadata: {
+        type: {
+          kind: { type: String },
+          handoffRunId: { type: String },
+          toolName: { type: String },
+          specialty: { type: String },
+          reason: { type: String },
+          doctorName: { type: String },
+          phone: { type: String },
+          modelName: { type: String },
+          totalTokens: { type: Number },
+          costUsd: { type: Number },
+          audio: {
+            type: {
+              status: { type: String },
+              provider: { type: String },
+              model: { type: String },
+              voice: { type: String },
+              generatedAt: { type: String },
+              chunks: [
+                {
+                  index: { type: Number, required: true },
+                  objectKey: { type: String, required: true },
+                  contentType: { type: String, required: true },
+                  _id: false,
+                },
+              ],
+            },
+            required: false,
+            _id: false,
+          },
+        },
+        required: false,
+        _id: false,
+      },
     },
     required: true,
     _id: false,

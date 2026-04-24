@@ -135,7 +135,7 @@ export class ChatService {
       runId,
     });
 
-    await this.messagesRepository.create({
+    const userMessage = await this.messagesRepository.create({
       userId: this.toObjectId(request.userId),
       conversationId: this.toObjectId(conversationId),
       runId: this.toObjectId(runId),
@@ -189,6 +189,7 @@ export class ChatService {
       createSseEvent(runId, 'run.started', {
         conversationId,
         status: 'running',
+        userMessageId: this.getDocumentId(userMessage),
       }),
     );
 
@@ -249,6 +250,10 @@ export class ChatService {
         role: 'assistant',
         content: {
           text: finalAssistantText,
+          metadata: {
+            modelName: this.resolveModelName(),
+            ...(totalTokens !== null ? { totalTokens } : {}),
+          },
         },
       });
 
@@ -289,6 +294,7 @@ export class ChatService {
           type: 'usage_final',
           payload: {
             totalTokens,
+            modelName: this.resolveModelName(),
           },
         });
       }
@@ -329,6 +335,9 @@ export class ChatService {
         createSseEvent(runId, 'run.completed', {
           status: 'completed',
           conversationId,
+          assistantMessageId: this.getDocumentId(assistantMessage),
+          createdAt: assistantMessage.cudFoil.createdAt?.toISOString() ?? endedAt.toISOString(),
+          metadata: assistantMessage.content.metadata ?? undefined,
         }),
       );
 
@@ -417,12 +426,20 @@ export class ChatService {
     return `${trimmed.slice(0, 57)}...`;
   }
 
+  private resolveModelName(): string {
+    return process.env.OPENAI_MODEL ?? 'gpt-4.1-mini';
+  }
+
   private mapAgentEventToSseEvent(
     runId: string,
     event: AgentEvent,
   ): StructuredSseEvent<Record<string, unknown>> {
     switch (event.type) {
       case 'message.delta':
+        return createSseEvent(runId, event.type, {
+          delta: event.delta,
+        });
+      case 'reasoning.delta':
         return createSseEvent(runId, event.type, {
           delta: event.delta,
         });
@@ -443,6 +460,7 @@ export class ChatService {
       case 'usage.final':
         return createSseEvent(runId, event.type, {
           totalTokens: event.totalTokens,
+          modelName: this.resolveModelName(),
         });
       case 'run.warning':
         return createSseEvent(runId, event.type, {
@@ -484,6 +502,7 @@ export class ChatService {
       id: this.getDocumentId(message),
       role: 'assistant',
       text: message.content.text,
+      metadata: message.content.metadata ?? undefined,
       createdAt: message.cudFoil.createdAt?.toISOString() ?? null,
     };
   }
