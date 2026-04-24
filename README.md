@@ -2,7 +2,7 @@
 
 MediBuddy is an agentic healthcare assistant that helps a patient create a health profile, chat with a care assistant, get safe non-prescriptive symptom support, review doctor follow-up options, and keep the conversation history available across sessions.
 
-Screen recording: [MediBuddy demo on Loom](https://www.loom.com/share/866e5be4455941f8bbcf826c09672d1d)
+Screen recording: [MediBuddy - End to End Journey](https://www.loom.com/share/866e5be4455941f8bbcf826c09672d1d)
 
 ## What MediBuddy does
 
