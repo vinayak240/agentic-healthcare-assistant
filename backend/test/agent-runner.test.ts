@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { runAgent } from '../src/agent/run-agent';
+import { runAgent } from '../src/agent/agent.core';
 import type { AgentTool } from '../src/agent/agent.types';
 
 describe('runAgent', () => {

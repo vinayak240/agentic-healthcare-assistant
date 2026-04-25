@@ -19,6 +19,7 @@ const AUDIO_CONTENT_TYPE = 'audio/mpeg';
 const DEFAULT_TTS_MODEL = 'gpt-4o-mini-tts';
 const DEFAULT_TTS_VOICE = 'coral';
 const TTS_CHUNK_MAX_WORDS = 15;
+const TTS_CHUNK_BATCH_SIZE = 15;
 
 @Injectable()
 export class ConversationService {
@@ -190,41 +191,14 @@ export class ConversationService {
       throw new BadRequestException('Message has no text to convert to audio');
     }
 
-    // Increased the chunks and seq call leads to huge latency.
-    // 1. Use open api stream
-    // 2. Parallel calls (*) // O(t * n) -> O(Max(t));
-    //  - To improve this or make it resiliant add batch (throttled approach) , will lead to an bottleneck
     try {
-      const uploadedChunks: MessageAudioMetadata['chunks'] = [];
-
-      await Promise.all(Array.from(chunks.entries()).map(async ([index, text]) => {
-          {
-          const audio = await this.openAiService.createSpeech({
-            text,
-            model: DEFAULT_TTS_MODEL,
-            voice: DEFAULT_TTS_VOICE,
-          });
-          const objectKey = [
-            'conversations',
-            params.conversationId,
-            'messages',
-            params.messageId,
-            `chunk-${String(index).padStart(3, '0')}.mp3`,
-          ].join('/');
-
-          await this.storageService.uploadObject({
-            key: objectKey,
-            body: audio,
-            contentType: AUDIO_CONTENT_TYPE,
-          });
-
-          uploadedChunks.push({
-            index,
-            objectKey,
-            contentType: AUDIO_CONTENT_TYPE,
-          });
-        }
-      }));
+      // Sequential chunk generation adds too much latency, so create speech in parallel batches.
+      // The batch size keeps long responses from making unbounded OpenAI and storage calls.
+      const uploadedChunks = await this.createAndUploadSpeechChunks({
+        chunks,
+        conversationId: params.conversationId,
+        messageId: params.messageId,
+      });
 
       const audioMetadata: MessageAudioMetadata = {
         status: 'ready',
@@ -404,6 +378,64 @@ export class ConversationService {
 
       return audio;
     }
+  }
+
+  private async createAndUploadSpeechChunks(input: {
+    chunks: string[];
+    conversationId: string;
+    messageId: string;
+  }): Promise<MessageAudioMetadata['chunks']> {
+    const uploadedChunks: MessageAudioMetadata['chunks'] = [];
+
+    for (let start = 0; start < input.chunks.length; start += TTS_CHUNK_BATCH_SIZE) {
+      const batch = input.chunks.slice(start, start + TTS_CHUNK_BATCH_SIZE);
+      const batchUploads = await Promise.all(
+        batch.map((text, offset) =>
+          this.createAndUploadSpeechChunk({
+            text,
+            index: start + offset,
+            conversationId: input.conversationId,
+            messageId: input.messageId,
+          }),
+        ),
+      );
+
+      uploadedChunks.push(...batchUploads);
+    }
+
+    return uploadedChunks;
+  }
+
+  private async createAndUploadSpeechChunk(input: {
+    text: string;
+    index: number;
+    conversationId: string;
+    messageId: string;
+  }): Promise<MessageAudioMetadata['chunks'][number]> {
+    const audio = await this.openAiService.createSpeech({
+      text: input.text,
+      model: DEFAULT_TTS_MODEL,
+      voice: DEFAULT_TTS_VOICE,
+    });
+    const objectKey = [
+      'conversations',
+      input.conversationId,
+      'messages',
+      input.messageId,
+      `chunk-${String(input.index).padStart(3, '0')}.mp3`,
+    ].join('/');
+
+    await this.storageService.uploadObject({
+      key: objectKey,
+      body: audio,
+      contentType: AUDIO_CONTENT_TYPE,
+    });
+
+    return {
+      index: input.index,
+      objectKey,
+      contentType: AUDIO_CONTENT_TYPE,
+    };
   }
 
   private splitTextForSpeech(text: string): string[] {
