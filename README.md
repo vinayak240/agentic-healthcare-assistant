@@ -54,6 +54,8 @@ This app is for demo and support workflows. It is not a replacement for a clinic
 
 Run all commands from the repo root.
 
+Refer this Video: [MediBuddy - Simple How To](https://www.loom.com/share/4467324ee903474b9fa5cb95d8e69baf)
+
 ### 1. Add your OpenAI API key
 
 You must set `OPENAI_KEY` before starting the app.
