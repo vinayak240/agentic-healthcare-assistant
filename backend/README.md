@@ -53,14 +53,30 @@ Use `OPENAI_KEY`, not `OPENAPI_KEY`.
 
 ## Local development
 
+If you want to run the backend process locally while keeping MongoDB and MinIO in Docker, start the services-only Compose file from the repo root:
+
+```bash
+docker compose -f docker-compose.local.yml up -d
+```
+
 From `backend/`:
 
 ```bash
 bun install
+MONGODB_URI="mongodb://app:healtcare@localhost:27017/healtcare-agent-db?authSource=healtcare-agent-db" \
+S3_ENDPOINT="http://localhost:9000" \
+S3_PUBLIC_ENDPOINT="http://localhost:9000" \
+OPENAI_KEY="your_openai_api_key_here" \
 bun run start
 ```
 
-For local non-Docker development, make sure MongoDB and MinIO-compatible storage are reachable and that the environment values match those services.
+For local non-Docker development, make sure MongoDB and MinIO-compatible storage are reachable and that the environment values match those services. The local Compose defaults expose MongoDB at `localhost:27017`, MinIO API at `localhost:9000`, and the MinIO console at `http://localhost:9001` with `admin` / `admin123`.
+
+Stop the local Docker services from the repo root:
+
+```bash
+docker compose -f docker-compose.local.yml down
+```
 
 Run backend tests:
 

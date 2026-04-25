@@ -49,11 +49,19 @@ That makes the browser call the backend directly at `http://localhost:8080`.
 
 ## Local development
 
+If you are running the frontend and backend locally, start MongoDB and MinIO from the repo root first:
+
+```bash
+docker compose -f docker-compose.local.yml up -d
+```
+
+Start the backend from `backend/` with the local service endpoints shown in `backend/README.md`.
+
 From `frontend/`:
 
 ```bash
 bun install
-bun run dev
+VITE_API_BASE_URL="http://localhost:8080" bun run dev
 ```
 
 Run a production build:
@@ -68,7 +76,7 @@ Run TypeScript checks without emitting files:
 bun run typecheck
 ```
 
-The backend should be running separately for the UI to fully work.
+The backend should be running separately for the UI to fully work. When the backend is local, set `VITE_API_BASE_URL` to `http://localhost:8080` before starting Vite.
 
 ## Docker behavior
 

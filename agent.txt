@@ -1,0 +1,15 @@
+User Request
+     ↓
+Scope Guard (fast exit)
+     ↓
+Load History + Tools
+     ↓
+runAgent() (reasoning loop)
+     ↓
+Queue ← tool + reasoning events
+     ↓
+Streaming (SSE)
+     ↓
+Final Prompt (second LLM)
+     ↓
+Token streaming to UI

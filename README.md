@@ -109,6 +109,44 @@ http://localhost:3000
 
 The app should route you to onboarding if no user is stored in your browser yet.
 
+## Local app with Docker services only
+
+Use `docker-compose.local.yml` when you want to run the backend and frontend directly on your machine, but keep MongoDB and MinIO in Docker.
+
+Start only MongoDB and MinIO:
+
+```bash
+docker compose -f docker-compose.local.yml up -d
+```
+
+Then run the backend from `backend/` with local service endpoints:
+
+```bash
+MONGODB_URI="mongodb://app:healtcare@localhost:27017/healtcare-agent-db?authSource=healtcare-agent-db" \
+S3_ENDPOINT="http://localhost:9000" \
+S3_PUBLIC_ENDPOINT="http://localhost:9000" \
+OPENAI_KEY="your_openai_api_key_here" \
+bun run start
+```
+
+Run the frontend from `frontend/` and point it at the local backend:
+
+```bash
+VITE_API_BASE_URL="http://localhost:8080" bun run dev
+```
+
+Stop the local services:
+
+```bash
+docker compose -f docker-compose.local.yml down
+```
+
+Remove the local MongoDB/MinIO data as well:
+
+```bash
+docker compose -f docker-compose.local.yml down -v
+```
+
 ## First-time UI flow
 
 1. Open `http://localhost:3000`.
