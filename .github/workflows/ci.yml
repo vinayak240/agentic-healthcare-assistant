@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+env:
+  OPENAI_KEY: ci-placeholder
+  LOG_LEVEL: info
+
+jobs:
+  stack-check:
+    name: Build, health check, and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install backend dependencies
+        id: backend-deps
+        working-directory: backend
+        run: bun install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        id: frontend-deps
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Build Docker images
+        id: docker-build
+        run: docker compose build --pull
+
+      - name: Start stack and wait for health
+        id: stack-up
+        run: docker compose up -d --wait --wait-timeout 180
+
+      - name: Verify service health
+        id: stack-health
+        run: |
+          set -euo pipefail
+
+          curl --fail --show-error --silent --output /dev/null http://localhost:8080/system/health
+          curl --fail --show-error --silent --output /dev/null http://localhost:3000
+          curl --fail --show-error --silent --output /dev/null http://localhost:9000/minio/health/live
+
+          mongo_status="$(docker inspect --format='{{.State.Health.Status}}' agentic-healthcare-assistant-mongo)"
+          if [ "$mongo_status" != "healthy" ]; then
+            echo "Mongo container is not healthy. Current status: $mongo_status"
+            exit 1
+          fi
+
+      - name: Run backend tests
+        id: backend-tests
+        working-directory: backend
+        run: bun run test
+
+      - name: Run frontend typecheck
+        id: frontend-typecheck
+        working-directory: frontend
+        run: bun run typecheck
+
+      - name: Run frontend build
+        id: frontend-build
+        working-directory: frontend
+        run: bun run build
+
+      - name: Print Docker Compose status
+        if: always()
+        run: docker compose ps
+
+      - name: Print Docker Compose logs
+        if: always()
+        run: docker compose logs --no-color
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
+
+      - name: Write CI summary
+        if: always()
+        run: |
+          verdict="success"
+          if [ "${{ job.status }}" != "success" ]; then
+            verdict="fail"
+          fi
+
+          {
+            echo "## CI Verdict"
+            echo
+            echo "**Final verdict:** $verdict"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Backend dependencies | ${{ steps.backend-deps.outcome }} |"
+            echo "| Frontend dependencies | ${{ steps.frontend-deps.outcome }} |"
+            echo "| Docker build | ${{ steps.docker-build.outcome }} |"
+            echo "| Stack startup | ${{ steps.stack-up.outcome }} |"
+            echo "| Stack health | ${{ steps.stack-health.outcome }} |"
+            echo "| Backend tests | ${{ steps.backend-tests.outcome }} |"
+            echo "| Frontend typecheck | ${{ steps.frontend-typecheck.outcome }} |"
+            echo "| Frontend build | ${{ steps.frontend-build.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

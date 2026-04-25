@@ -25,6 +25,7 @@ import { RunsRepository } from '../../src/dal/repositories/runs.repository';
 import { UsagesRepository } from '../../src/dal/repositories/usages.repository';
 import { UsersRepository } from '../../src/dal/repositories/users.repository';
 import { AppEventEmitter } from '../../src/events/emitter/event.emitter';
+import { LoggerService } from '../../src/logger/logger.service';
 
 type WithId<T> = T & {
   _id: {
@@ -42,6 +43,24 @@ export const TEST_IDS = {
   userMessageId: '507f1f77bcf86cd799439015',
   usageId: '507f1f77bcf86cd799439016',
 } as const;
+
+const silentLogger = {
+  child() {
+    return this;
+  },
+  debug() {
+    return undefined;
+  },
+  error() {
+    return undefined;
+  },
+  info() {
+    return undefined;
+  },
+  warn() {
+    return undefined;
+  },
+};
 
 export interface MockRepositories {
   conversationsRepository: {
@@ -637,6 +656,7 @@ export async function createApiTestContext() {
       { provide: MinioStorageService, useValue: minioStorageService },
       { provide: AgentService, useValue: agentService },
       { provide: AppEventEmitter, useValue: appEventEmitter },
+      { provide: LoggerService, useValue: silentLogger },
     ],
   }).compile();
 

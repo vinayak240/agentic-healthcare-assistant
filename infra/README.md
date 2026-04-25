@@ -46,6 +46,8 @@ Use `OPENAI_KEY`, not `OPENAPI_KEY`.
 
 You can provide it by editing `backend/.env.example` before building, or by setting it in the `backend.environment` section of `docker-compose.yml`. Compose-provided environment values can override values copied into the backend image.
 
+The backend also accepts `LOG_LEVEL` in the same places. Supported values are `debug`, `info`, `warn`, and `error`; it defaults to `info`.
+
 ## Build files
 
 ### Backend image

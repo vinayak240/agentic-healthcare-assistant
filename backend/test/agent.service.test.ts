@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'bun:test';
 import { AgentService } from '../src/agent/agent.service';
 
+const silentLogger = {
+  child() {
+    return this;
+  },
+  debug() {
+    return undefined;
+  },
+  error() {
+    return undefined;
+  },
+  info() {
+    return undefined;
+  },
+  warn() {
+    return undefined;
+  },
+};
+
 describe('AgentService', () => {
   it('rejects clearly non-medical coding requests without calling OpenAI or tools', async () => {
     let jsonCalls = 0;
@@ -44,6 +62,7 @@ describe('AgentService', () => {
         },
       } as never,
       appEventEmitter as never,
+      silentLogger as never,
     );
 
     const events: Array<{ type: string; [key: string]: unknown }> = [];
@@ -108,6 +127,7 @@ describe('AgentService', () => {
           return undefined;
         },
       } as never,
+      silentLogger as never,
     );
     const events: Array<{ type: string; [key: string]: unknown }> = [];
 
@@ -159,6 +179,7 @@ describe('AgentService', () => {
           return undefined;
         },
       } as never,
+      silentLogger as never,
     );
     const events: Array<{ type: string; [key: string]: unknown }> = [];
 
@@ -222,6 +243,7 @@ describe('AgentService', () => {
         },
       } as never,
       appEventEmitter as never,
+      silentLogger as never,
     );
 
     for await (const event of service.streamResponse({
@@ -326,6 +348,7 @@ describe('AgentService', () => {
         },
       } as never,
       appEventEmitter as never,
+      silentLogger as never,
     );
     const events: Array<{ type: string; [key: string]: unknown }> = [];
 
@@ -440,6 +463,7 @@ describe('AgentService', () => {
         },
       } as never,
       appEventEmitter as never,
+      silentLogger as never,
     );
 
     for await (const event of service.streamResponse({
@@ -541,6 +565,7 @@ describe('AgentService', () => {
         },
       } as never,
       appEventEmitter as never,
+      silentLogger as never,
     );
 
     for await (const event of service.streamResponse({
@@ -603,6 +628,7 @@ describe('AgentService', () => {
           return undefined;
         },
       } as never,
+      silentLogger as never,
     );
 
     const events: Array<{ type: string; [key: string]: unknown }> = [];
@@ -697,6 +723,7 @@ describe('AgentService', () => {
         },
       } as never,
       appEventEmitter as never,
+      silentLogger as never,
     );
 
     const events: Array<{ type: string; [key: string]: unknown }> = [];

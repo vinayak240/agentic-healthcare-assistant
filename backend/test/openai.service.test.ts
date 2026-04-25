@@ -8,7 +8,7 @@ describe('OpenAiService', () => {
       get(key: string) {
         return key === 'OPENAI_KEY' ? undefined : null;
       },
-    } as never);
+    } as never, silentLogger as never);
 
     expect(() => service.assertConfigured()).toThrow();
 
@@ -94,6 +94,7 @@ describe('OpenAiService', () => {
   });
 
   it('logs OpenAI requests without leaking the raw prompt text', async () => {
+    const entries: string[] = [];
     const service = createServiceWithClient({
       async create() {
         return {
@@ -103,19 +104,9 @@ describe('OpenAiService', () => {
           },
         };
       },
-    });
-    const originalDebug = console.debug;
-    const entries: string[] = [];
+    }, createMemoryLogger(entries));
 
-    console.debug = (...args: unknown[]) => {
-      entries.push(args.map((value) => String(value)).join(' '));
-    };
-
-    try {
-      await service.createJsonResponse('very sensitive symptom prompt');
-    } finally {
-      console.debug = originalDebug;
-    }
+    await service.createJsonResponse('very sensitive symptom prompt');
 
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.some((entry) => entry.includes('very sensitive symptom prompt'))).toBe(false);
@@ -123,7 +114,37 @@ describe('OpenAiService', () => {
   });
 });
 
-function createServiceWithClient(create: { create: (input: unknown) => Promise<unknown> }) {
+const silentLogger = {
+  child() {
+    return this;
+  },
+  debug() {
+    return undefined;
+  },
+  error() {
+    return undefined;
+  },
+  info() {
+    return undefined;
+  },
+  warn() {
+    return undefined;
+  },
+};
+
+function createMemoryLogger(entries: string[]) {
+  return {
+    ...silentLogger,
+    debug(event: string, metadata: Record<string, unknown> = {}) {
+      entries.push(JSON.stringify({ event, ...metadata }));
+    },
+  };
+}
+
+function createServiceWithClient(
+  create: { create: (input: unknown) => Promise<unknown> },
+  logger: typeof silentLogger = silentLogger,
+) {
   const service = new OpenAiService({
     get(key: string) {
       if (key === 'OPENAI_KEY') {
@@ -136,7 +157,7 @@ function createServiceWithClient(create: { create: (input: unknown) => Promise<u
 
       return null;
     },
-  } as never);
+  } as never, logger as never);
 
   (service as unknown as { client: unknown }).client = {
     responses: create,

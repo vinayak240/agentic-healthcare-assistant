@@ -84,6 +84,14 @@ OPENAI_KEY: your_openai_api_key_here
 
 Compose environment values can override the container `.env`, so use this option when you want the key controlled directly by Docker Compose.
 
+Optional backend logging:
+
+```bash
+LOG_LEVEL=info
+```
+
+`LOG_LEVEL` sets the minimum structured log level. Supported values are `debug`, `info`, `warn`, and `error`; the default is `info`.
+
 ### 2. Start the full stack
 
 ```bash
@@ -125,6 +133,7 @@ Then run the backend from `backend/` with local service endpoints:
 MONGODB_URI="mongodb://app:healtcare@localhost:27017/healtcare-agent-db?authSource=healtcare-agent-db" \
 S3_ENDPOINT="http://localhost:9000" \
 S3_PUBLIC_ENDPOINT="http://localhost:9000" \
+LOG_LEVEL="info" \
 OPENAI_KEY="your_openai_api_key_here" \
 bun run start
 ```

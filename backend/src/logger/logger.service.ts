@@ -6,6 +6,15 @@ export interface LogContext {
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+const DEFAULT_LOG_LEVEL: LogLevel = 'info';
+
 @Injectable()
 export class LoggerService {
   private defaults: LogContext = {};
@@ -41,6 +50,10 @@ export class LoggerService {
   }
 
   private write(level: LogLevel, event: string, metadata: LogContext): void {
+    if (!this.shouldWrite(level)) {
+      return;
+    }
+
     const entry = {
       timestamp: new Date().toISOString(),
       level,
@@ -66,5 +79,23 @@ export class LoggerService {
     }
 
     console.log(serialized);
+  }
+
+  private shouldWrite(level: LogLevel): boolean {
+    return LOG_LEVEL_PRIORITY[level] >= LOG_LEVEL_PRIORITY[this.resolveLogLevel()];
+  }
+
+  private resolveLogLevel(): LogLevel {
+    const configuredLevel = process.env.LOG_LEVEL?.toLowerCase();
+
+    if (this.isLogLevel(configuredLevel)) {
+      return configuredLevel;
+    }
+
+    return DEFAULT_LOG_LEVEL;
+  }
+
+  private isLogLevel(value: string | undefined): value is LogLevel {
+    return value === 'debug' || value === 'info' || value === 'warn' || value === 'error';
   }
 }

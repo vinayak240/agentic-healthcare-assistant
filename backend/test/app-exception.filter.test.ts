@@ -5,7 +5,7 @@ import { AppExceptionFilter } from '../src/common/filters/app-exception.filter';
 
 describe('AppExceptionFilter', () => {
   it('formats chat validation errors as CHAT_REQUEST_INVALID', () => {
-    const filter = new AppExceptionFilter();
+    const filter = new AppExceptionFilter(silentLogger as never);
     const response = createMockResponse();
 
     filter.catch(
@@ -28,7 +28,7 @@ describe('AppExceptionFilter', () => {
   });
 
   it('formats not-found errors with stable resource codes', () => {
-    const filter = new AppExceptionFilter();
+    const filter = new AppExceptionFilter(silentLogger as never);
     const response = createMockResponse();
 
     filter.catch(new NotFoundException('Conversation not found'), createHost('/chat', response));
@@ -42,6 +42,12 @@ describe('AppExceptionFilter', () => {
     });
   });
 });
+
+const silentLogger = {
+  error() {
+    return undefined;
+  },
+};
 
 function createHost(url: string, response: ReturnType<typeof createMockResponse>): ArgumentsHost {
   return {

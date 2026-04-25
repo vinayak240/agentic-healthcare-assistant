@@ -44,10 +44,13 @@ CORS_ORIGIN=*
 OPENAI_MODEL=gpt-4.1-mini
 AGENT_MAX_CAP=5
 AGENT_HISTORY_CAP=10
+LOG_LEVEL=info
 S3_ENDPOINT=http://minio:9000
 S3_PUBLIC_ENDPOINT=http://localhost:9000
 S3_BUCKET=chat-audio
 ```
+
+`LOG_LEVEL` controls the minimum structured log level. Supported values are `debug`, `info`, `warn`, and `error`; missing or invalid values default to `info`.
 
 Use `OPENAI_KEY`, not `OPENAPI_KEY`.
 

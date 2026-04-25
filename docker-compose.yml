@@ -84,6 +84,7 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
       AGENT_MAX_CAP: ${AGENT_MAX_CAP:-5}
       AGENT_HISTORY_CAP: ${AGENT_HISTORY_CAP:-10}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
       S3_REGION: ${S3_REGION:-us-east-1}
