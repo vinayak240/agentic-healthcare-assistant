@@ -37,7 +37,7 @@ jobs:
       - name: Install frontend dependencies
         id: frontend-deps
         working-directory: frontend
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build Docker images
         id: docker-build
